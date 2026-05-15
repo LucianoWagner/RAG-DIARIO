@@ -1,0 +1,7 @@
+interface:
+  display_name: "RAG Implementer"
+  short_description: "Implement Hemeroteca RAG phases"
+  default_prompt: "Use $rag-implementer to implement the next Hemeroteca RAG phase with focused changes and tests."
+
+policy:
+  allow_implicit_invocation: true

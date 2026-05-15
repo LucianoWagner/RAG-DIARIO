@@ -1,0 +1,31 @@
+# Framework
+fastapi>=0.115.0,<1.0.0
+uvicorn[standard]>=0.34.0,<1.0.0
+python-dotenv>=1.0.0,<2.0.0
+pydantic>=2.10.0,<3.0.0
+pydantic-settings>=2.7.0,<3.0.0
+
+# LangChain
+langchain>=0.3.14
+langchain-community>=0.3.14
+langchain-core>=0.3.30
+langchain-text-splitters>=0.3.0
+langchain-groq>=0.1.0
+
+# Retrieval
+qdrant-client>=1.9.0
+rank-bm25>=0.2.2
+flashrank>=0.2.9
+sentence-transformers>=2.7.0
+
+# Ingestion
+httpx>=0.28.0
+trafilatura>=1.9.0
+beautifulsoup4>=4.12.0
+lxml>=5.1.0
+tenacity>=8.2.0
+spacy>=3.7.0
+
+# Utilities
+loguru>=0.7.3
+pytest>=9.0.0

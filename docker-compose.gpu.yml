@@ -1,0 +1,22 @@
+# =============================================================================
+# Docker Compose Override — Soporte GPU NVIDIA
+# =============================================================================
+# Este archivo se usa SOLO si tenés una GPU NVIDIA compatible.
+# Requiere nvidia-container-toolkit instalado en el host.
+#
+# Uso:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# O simplificar con el Makefile:
+#   make up-gpu
+# =============================================================================
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag-qdrant
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: rag-openwebui
+    ports:
+      - "${WEBUI_PORT:-3000}:8080"
+    volumes:
+      - openwebui_data:/app/backend/data
+    environment:
+      - ENABLE_OLLAMA_API=false
+      - OPENAI_API_BASE_URLS=http://host.docker.internal:${BACKEND_PORT:-8080}/v1
+      - OPENAI_API_KEYS=sk-dummy-key
+      - WEBUI_AUTH=false
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+    name: rag_ollama_data
+  qdrant_data:
+    name: rag_qdrant_data
+  openwebui_data:
+    name: rag_openwebui_data

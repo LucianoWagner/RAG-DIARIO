@@ -1,0 +1,46 @@
+# ==== Environment ====
+.env
+
+# ==== Python ====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Entornos virtuales (en cualquier nivel)
+**/venv/
+**/venv-eval/
+.venv/
+venv/
+venv-eval/
+
+# Rutas específicas detectadas
+backend/backend/venv/
+backend/venv/
+
+# ==== Data and DB ====
+data/
+chromadb/
+
+# ==== Corpus raw (se descarga con script) ====
+corpus/raw/
+
+# ==== Evaluation results (cada uno genera los suyos)
+evaluation/results/
+
+# ==== IDE ====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ==== OS ====
+.DS_Store
+Thumbs.db
+
+# ==== Docker ====
+*.log

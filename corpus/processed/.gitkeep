@@ -1,0 +1,15 @@
+# Directorio para archivos Markdown procesados del corpus Docker.
+# Estos archivos son el input del pipeline de ingesta (make ingest).
+#
+# Estructura esperada:
+#   processed/
+#   ├── get-started/
+#   │   └── *.md
+#   ├── desktop/
+#   │   ├── install/
+#   │   └── troubleshoot/
+#   ├── engine/
+#   │   ├── install/
+#   │   └── daemon/
+#   └── cli/
+#       └── *.md
