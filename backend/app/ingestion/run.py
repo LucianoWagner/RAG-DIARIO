@@ -13,7 +13,7 @@ from loguru import logger
 from app.config import get_settings
 from app.ingestion.chunker import chunk_documents
 from app.ingestion.metadata import enrich_metadata
-from app.ingestion.parsers.html_parser import parse_html_directory
+from app.ingestion.parsers.html_parser import parse_html_directory, write_parsed_documents
 from app.ingestion.scrapers.eldia_web import scrape_year
 from app.retrieval.vector_store import index_documents
 
@@ -41,12 +41,14 @@ def run_ingestion(
     settings = get_settings()
     target_year = year or settings.scraper_target_year
     raw_year_dir = _data_path(settings.raw_data_dir) / "eldia" / str(target_year)
+    parsed_output_path = _data_path(settings.parsed_data_dir) / "eldia" / str(target_year) / "documents.json"
     started_at = time.perf_counter()
 
     logger.info("=" * 72)
     logger.info("INGESTA HEMEROTECA - FASE 1")
     logger.info(f"stage={stage} | year={target_year} | force={force}")
     logger.info(f"raw_year_dir={raw_year_dir}")
+    logger.info(f"parsed_output={parsed_output_path}")
     logger.info(f"qdrant={settings.qdrant_url} | collection={settings.qdrant_collection}")
     logger.info(f"embedding_model={settings.embedding_model}")
     logger.info("=" * 72)
@@ -61,6 +63,7 @@ def run_ingestion(
 
     logger.info("[2/5] Parseando HTML con trafilatura")
     documents = parse_html_directory(raw_year_dir)
+    write_parsed_documents(documents, parsed_output_path)
     logger.info(f"[2/5] Parse terminado | documentos validos={len(documents)}")
     if stage == "parse":
         logger.info("Stage solicitado: parse. Fin.")
