@@ -27,9 +27,9 @@ def test_parse_html_file_extrae_texto_y_metadata(tmp_path, monkeypatch):
     html_path.with_suffix(".json").write_text(
         json.dumps(
             {
-                "source_url": "https://www.eldia.com/nota/2005-3-15-ejemplo",
+                "source_url": "https://www.pagina12.com.ar/diario/sociedad/3-1-2005-03-15.html",
                 "publication_date": "2005-03-15",
-                "newspaper": "el_dia",
+                "newspaper": "pagina12",
             }
         ),
         encoding="utf-8",
@@ -50,7 +50,7 @@ def test_parse_html_file_extrae_texto_y_metadata(tmp_path, monkeypatch):
     assert document.metadata["article_title"] == "Titulo desde trafilatura"
     assert document.metadata["section"] == "La Ciudad"
     assert document.metadata["author"] == "Redaccion"
-    assert document.metadata["source_url"] == "https://www.eldia.com/nota/2005-3-15-ejemplo"
+    assert document.metadata["source_url"] == "https://www.pagina12.com.ar/diario/sociedad/3-1-2005-03-15.html"
     assert document.metadata["source_type"] == "html"
     assert document.metadata["granularity"] == "article"
 

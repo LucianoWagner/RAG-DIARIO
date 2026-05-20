@@ -32,7 +32,10 @@ class Gazetteer:
 @lru_cache()
 def load_gazetteer() -> Gazetteer:
     settings = get_settings()
-    data = json.loads(Path(settings.gazetteer_path).read_text(encoding="utf-8"))
+    gazetteer_path = Path(settings.gazetteer_path)
+    if not gazetteer_path.is_absolute():
+        gazetteer_path = Path(__file__).resolve().parents[4] / gazetteer_path
+    data = json.loads(gazetteer_path.read_text(encoding="utf-8"))
     aliases = [data["city"]]
     aliases.extend(data.get("neighborhoods", []))
     aliases.extend(data.get("nearby_partidos", []))

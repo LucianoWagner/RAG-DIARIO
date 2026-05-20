@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     scraper_user_agent: str = "HemerotecaLaPlataAcademic/1.0"
     scraper_rate_limit_seconds: float = 2.0
     scraper_target_year: int = 2005
+    scraper_target_date: str = "17-03-2005"
     scraper_max_days: int | None = 7
     scraper_discovery_mode: str = "auto"
     scraper_search_terms: str = "La Plata"
@@ -51,9 +52,6 @@ class Settings(BaseSettings):
     enriched_data_dir: str = "backend/data/enriched"
     gazetteer_path: str = "backend/data/gazetteer/la_plata_partidos.json"
 
-    eldia_base_url: str = "https://www.eldia.com"
-    eldia_archive_base_url: str = "https://www.eldia.com/edis"
-    eldia_sitemap_url: str = "https://www.eldia.com/sitemap.xml"
     request_timeout_seconds: float = 20.0
 
     reranker_model_name: str = "ms-marco-MultiBERT-L-12"

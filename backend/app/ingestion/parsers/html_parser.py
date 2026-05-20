@@ -220,7 +220,7 @@ def parse_html_file(html_path: Path, min_text_chars: int = MIN_TEXT_CHARS) -> Do
         metadata={
             "chunk_id": f"{source_id}::chunk::0",
             "source_id": source_id,
-            "newspaper": sidecar.get("newspaper", "el_dia"),
+            "newspaper": sidecar.get("newspaper", "pagina12"),
             "source_type": "html",
             "granularity": "article",
             "publication_date": _extract_publication_date(soup, trafilatura_metadata, sidecar),

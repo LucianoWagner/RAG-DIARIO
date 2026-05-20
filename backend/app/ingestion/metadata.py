@@ -44,7 +44,7 @@ def enrich_metadata(
         chunk.metadata["primary_location"] = primary_location
         chunk.metadata["text"] = chunk.page_content
         chunk.metadata["text_clean"] = " ".join(chunk.page_content.split())
-        chunk.metadata.setdefault("newspaper", "el_dia")
+        chunk.metadata.setdefault("newspaper", "pagina12")
         chunk.metadata.setdefault("source_type", "html")
         chunk.metadata.setdefault("granularity", "article")
         chunk.metadata.setdefault("source_pdf_path", None)
