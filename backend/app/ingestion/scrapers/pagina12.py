@@ -24,7 +24,6 @@ ROBOTS_URL = "https://www.pagina12.com.ar/robots.txt"
 BASE_URL = "https://www.pagina12.com.ar"
 REQUEST_TIMEOUT_SECONDS = 30
 RATE_LIMIT_SECONDS = 2
-TARGET_PHRASE = "la plata"
 ARCHIVE_URL_DATE_RE = re.compile(r"-(\d{4})-(\d{2})-(\d{2})\.html$")
 SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
@@ -150,10 +149,6 @@ def verify_robots_allowed(
     logger.info("robots.txt no prohibe las rutas requeridas")
 
 
-def _contains_target_phrase(text: str | None) -> bool:
-    return bool(text and TARGET_PHRASE in " ".join(text.lower().split()))
-
-
 def _is_article_url(url: str) -> bool:
     parsed = urlparse(url)
     if parsed.netloc and parsed.netloc not in {"www.pagina12.com.ar", "pagina12.com.ar"}:
@@ -172,6 +167,10 @@ def _is_article_url(url: str) -> bool:
         "/rss",
     )
     return not any(part in path for part in blocked_parts)
+
+
+def _contains_phrase(text: str | None, phrase: str) -> bool:
+    return bool(text and phrase.lower() in " ".join(text.lower().split()))
 
 
 def _archive_article_date(url: str) -> date | None:
@@ -204,6 +203,15 @@ def _is_archive_article_url(url: str, expected_date: date | None = None) -> bool
         return False
 
     return expected_date is None or article_date == expected_date
+
+
+def _article_section(article_url: str) -> str | None:
+    parts = [part for part in urlparse(article_url).path.split("/") if part]
+    if len(parts) >= 2 and parts[0] == "diario":
+        if parts[1] == "suplementos" and len(parts) >= 3:
+            return f"suplementos/{parts[2]}"
+        return parts[1]
+    return None
 
 
 def _snippet_for_anchor(anchor) -> str | None:
@@ -239,7 +247,7 @@ def _extract_candidate_urls(html_text: str, base_url: str, require_phrase: bool)
         title = " ".join(anchor.get_text(" ", strip=True).split()) or None
         snippet = _snippet_for_anchor(anchor)
         combined_text = " ".join(part for part in (title, snippet) if part)
-        if require_phrase and not _contains_target_phrase(combined_text):
+        if require_phrase and not _contains_phrase(combined_text, "Argentina"):
             continue
 
         seen_urls.add(url)
@@ -266,12 +274,16 @@ def _extract_archive_article_urls(html_text: str, base_url: str, expected_date: 
 
         title = " ".join(anchor.get_text(" ", strip=True).split()) or None
         snippet = _nearby_archive_text(anchor) or None
-        combined_text = snippet or title or ""
-        if not _contains_target_phrase(combined_text):
-            continue
 
         seen_urls.add(url)
-        discovered.append({"url": url, "title": title, "snippet": snippet})
+        discovered.append(
+            {
+                "url": url,
+                "title": title,
+                "snippet": snippet,
+                "section": _article_section(url),
+            }
+        )
 
     return discovered
 
@@ -289,7 +301,14 @@ def _extract_all_archive_article_urls(html_text: str, base_url: str, expected_da
         title = " ".join(anchor.get_text(" ", strip=True).split()) or None
         snippet = _nearby_archive_text(anchor) or _snippet_for_anchor(anchor)
         seen_urls.add(url)
-        discovered.append({"url": url, "title": title, "snippet": snippet})
+        discovered.append(
+            {
+                "url": url,
+                "title": title,
+                "snippet": snippet,
+                "section": _article_section(url),
+            }
+        )
 
     return discovered
 
@@ -334,7 +353,7 @@ def discover_with_daily_edition(client: httpx.Client, parsed_date: date) -> list
 
         logger.info("HTML edicion recibido | chars=%s | url=%s", len(html_text), edition_url)
         urls = _extract_archive_article_urls(html_text, edition_url, parsed_date)
-        logger.info("Se encontraron %s URLs con mencion de 'La Plata'", len(urls))
+        logger.info("Se encontraron %s URLs de notas para la fecha", len(urls))
         if urls:
             return urls
 
@@ -345,8 +364,8 @@ def discover_with_daily_edition(client: httpx.Client, parsed_date: date) -> list
 
     if unfiltered_urls:
         logger.warning(
-            "No se encontraron menciones cercanas de 'La Plata'; "
-            "se guardan URLs sin filtro para no bloquear la fase."
+            "No se encontraron URLs en el extractor principal; "
+            "se guardan URLs sin filtro semantico para no bloquear la fase."
         )
         return unfiltered_urls
 
@@ -386,13 +405,6 @@ def _safe_article_filename(article_url: str) -> str:
     return SAFE_FILENAME_RE.sub("-", filename)
 
 
-def _article_section(article_url: str) -> str | None:
-    parts = [part for part in urlparse(article_url).path.split("/") if part]
-    if len(parts) >= 2 and parts[0] == "diario":
-        return parts[1]
-    return None
-
-
 def _article_output_path(output_dir: Path, article_url: str) -> Path:
     return output_dir / _safe_article_filename(article_url)
 
@@ -425,19 +437,30 @@ def download_articles_from_url_file(
     output_root: Path | None = None,
     force: bool = False,
     max_articles: int | None = None,
+    sections: list[str] | None = None,
 ) -> list[Path]:
     urls_path = Path(urls_path)
     payload = _load_urls_payload(urls_path)
     raw_date = str(payload["date"])
     parsed_date = parse_date_arg(raw_date)
     output_dir = build_articles_output_dir(raw_date, output_root=output_root)
-    url_items = payload["urls"][:max_articles] if max_articles is not None else payload["urls"]
+    url_items = payload["urls"]
+    if sections:
+        wanted_sections = {section.strip().lower() for section in sections if section.strip()}
+        url_items = [
+            item
+            for item in url_items
+            if str(item.get("section") or _article_section(str(item.get("url", "")))).lower() in wanted_sections
+        ]
+    if max_articles is not None:
+        url_items = url_items[:max_articles]
     stored_files: list[Path] = []
 
     logger.info(
-        "Descargando HTML de notas Pagina 12 | fecha=%s | urls=%s | output_dir=%s",
+        "Descargando HTML de notas Pagina 12 | fecha=%s | urls=%s | sections=%s | output_dir=%s",
         raw_date,
         len(url_items),
+        ",".join(sections or ["*"]),
         output_dir,
     )
     if not url_items:
@@ -477,7 +500,7 @@ def download_articles_from_url_file(
                     "publication_date": parsed_date.isoformat(),
                     "newspaper": "pagina12",
                     "article_title": item.get("title"),
-                    "section": _article_section(article_url),
+                    "section": item.get("section") or _article_section(article_url),
                     "snippet": item.get("snippet"),
                 },
             )
@@ -501,13 +524,8 @@ def discover_urls_for_date(raw_date: str, output_root: Path | None = None) -> Pa
     try:
         with _http_client() as client:
             verify_robots_allowed(client, parsed_date)
-            urls = discover_with_search(client, raw_date)
-            mechanism_used = "buscador"
-
-            if not urls:
-                time.sleep(RATE_LIMIT_SECONDS)
-                urls = discover_with_daily_edition(client, parsed_date)
-                mechanism_used = "edicion_del_dia"
+            urls = discover_with_daily_edition(client, parsed_date)
+            mechanism_used = "edicion_del_dia"
 
         save_output(output_path, raw_date, mechanism_used, urls)
         logger.info(
@@ -539,13 +557,20 @@ def main() -> None:
     )
     parser.add_argument("--force", action="store_true", help="Redescarga HTML aunque ya exista.")
     parser.add_argument("--max-articles", type=int, default=None, help="Limite opcional de notas a descargar.")
+    parser.add_argument(
+        "--sections",
+        default=None,
+        help="Lista separada por coma de secciones a descargar, ej: elmundo,deportes.",
+    )
     args = parser.parse_args()
     urls_path = args.urls_path or discover_urls_for_date(args.date)
     if args.download:
+        sections = args.sections.split(",") if args.sections else None
         download_articles_from_url_file(
             urls_path=urls_path,
             force=args.force,
             max_articles=args.max_articles,
+            sections=sections,
         )
 
 

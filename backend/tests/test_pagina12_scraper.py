@@ -83,7 +83,7 @@ def test_edition_url_usa_estructura_real():
     )
 
 
-def test_extract_archive_article_urls_filtra_la_plata():
+def test_extract_archive_article_urls_no_filtra_por_la_plata_y_agrega_seccion():
     html = """
     <html><body>
       <a href="/diario/universidad/10-1-2005-04-15.html">
@@ -107,6 +107,13 @@ def test_extract_archive_article_urls_filtra_la_plata():
             "url": "https://www.pagina12.com.ar/diario/universidad/10-1-2005-04-15.html",
             "title": "El cupo amparado",
             "snippet": "El cupo amparado CONFLICTO EN MEDICINA DE LA PLATA",
+            "section": "universidad",
+        },
+        {
+            "url": "https://www.pagina12.com.ar/diario/deportes/8-2-2005-04-15.html",
+            "title": "Otra nota",
+            "snippet": "Otra nota Sin mencion geografica",
+            "section": "deportes",
         }
     ]
 
@@ -117,6 +124,7 @@ def test_extract_all_archive_article_urls_sin_filtro():
       <a href="/diario/universidad/10-1-2005-03-15.html">Nota uno</a>
       <p>Texto cualquiera</p>
       <a href="/diario/deportes/8-2-2005-03-15.html">Nota dos</a>
+      <a href="/diario/suplementos/cash/17-1771-2005-03-15.html">Nota cash</a>
       <a href="/diario/suplementos/libero/10-3-2005-03-14.html">Nota anterior</a>
       <a href="/diario/psicologia/index-2005-03-10.html">Indice suplemento anterior</a>
       <a href="/diario/elpais/index-2005-03-15.html">Indice del dia</a>
@@ -133,7 +141,9 @@ def test_extract_all_archive_article_urls_sin_filtro():
     assert [item["url"] for item in urls] == [
         "https://www.pagina12.com.ar/diario/universidad/10-1-2005-03-15.html",
         "https://www.pagina12.com.ar/diario/deportes/8-2-2005-03-15.html",
+        "https://www.pagina12.com.ar/diario/suplementos/cash/17-1771-2005-03-15.html",
     ]
+    assert [item["section"] for item in urls] == ["universidad", "deportes", "suplementos/cash"]
 
 
 def test_archive_article_url_exige_nota_y_fecha_objetivo():

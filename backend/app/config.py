@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     llm_model: str = "llama3.1:8b"
     embedding_model: str = "intfloat/multilingual-e5-large"
     groq_api_key: str | None = None
+    scope_embedding_threshold: float = 0.15
+    scope_llm_model: str = "qwen2.5:3b-instruct"
+    scope_llm_enabled: bool = True
 
     qdrant_url: str = "http://localhost:6333"
     qdrant_collection: str = "hemeroteca_la_plata"
@@ -50,7 +53,7 @@ class Settings(BaseSettings):
     raw_data_dir: str = "backend/data/raw"
     parsed_data_dir: str = "backend/data/parsed"
     enriched_data_dir: str = "backend/data/enriched"
-    gazetteer_path: str = "backend/data/gazetteer/la_plata_partidos.json"
+    gazetteer_path: str = "backend/data/gazetteer/argentina.json"
 
     request_timeout_seconds: float = 20.0
 

@@ -63,6 +63,10 @@ def _preview_chunks(chunks: list[Document], limit: int, content_chars: int) -> N
             "article_title": chunk.metadata.get("article_title"),
             "section": chunk.metadata.get("section"),
             "source_url": chunk.metadata.get("source_url"),
+            "country_scope": chunk.metadata.get("country_scope"),
+            "scope_signals": chunk.metadata.get("scope_signals"),
+            "article_country_scope": chunk.metadata.get("article_country_scope"),
+            "article_scope_signals": chunk.metadata.get("article_scope_signals"),
             "primary_location": chunk.metadata.get("primary_location"),
             "location_mentions": chunk.metadata.get("location_mentions"),
             "persons": chunk.metadata.get("persons"),
@@ -82,6 +86,7 @@ def run_ingestion(
     stage: str = "all",
     date: str | None = None,
     max_articles: int | None = None,
+    sections: list[str] | None = None,
     preview_limit: int = 3,
     preview_chars: int = 800,
 ) -> list[Document]:
@@ -109,6 +114,7 @@ def run_ingestion(
     logger.info("=" * 72)
     logger.info("INGESTA HEMEROTECA - FASE 1")
     logger.info(f"source=pagina12 | stage={stage} | date={target_date} | force={force}")
+    logger.info(f"sections={','.join(sections or ['*'])} | max_articles={max_articles}")
     logger.info(f"urls_path={urls_path}")
     logger.info(f"raw_date_dir={raw_date_dir}")
     logger.info(f"parsed_output={parsed_output_path}")
@@ -124,6 +130,7 @@ def run_ingestion(
             urls_path=urls_path,
             force=force,
             max_articles=max_articles,
+            sections=sections,
         )
         logger.info(f"[1/5] Scraping terminado | archivos HTML disponibles={len(scraped_files)}")
         if stage == "scrape":
@@ -176,6 +183,11 @@ def main() -> None:
     parser.add_argument("--stage", choices=("all", "scrape", "parse", "enrich", "preview", "index"), default="all")
     parser.add_argument("--date", default=None, help="Fecha Pagina/12 en formato DD-MM-YYYY.")
     parser.add_argument("--max-articles", type=int, default=None, help="Limite opcional para pruebas.")
+    parser.add_argument(
+        "--sections",
+        default=None,
+        help="Lista separada por coma de secciones a procesar, ej: elmundo,deportes,suplementos/libros.",
+    )
     parser.add_argument("--preview-limit", type=int, default=3, help="Cantidad de chunks enriquecidos a imprimir.")
     parser.add_argument("--preview-chars", type=int, default=800, help="Caracteres de contenido a imprimir por chunk.")
     args = parser.parse_args()
@@ -189,6 +201,7 @@ def main() -> None:
         stage=stage,
         date=args.date,
         max_articles=args.max_articles,
+        sections=args.sections.split(",") if args.sections else None,
         preview_limit=args.preview_limit,
         preview_chars=args.preview_chars,
     )

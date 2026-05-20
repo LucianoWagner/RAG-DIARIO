@@ -19,6 +19,10 @@ class NewsChunkMetadata(BaseModel):
     decade: int
     location_mentions: list[str] = Field(default_factory=list)
     primary_location: str | None = None
+    country_scope: Literal["argentina", "international", "unknown"] = "unknown"
+    scope_signals: list[str] = Field(default_factory=list)
+    article_country_scope: Literal["argentina", "international", "unknown"] = "unknown"
+    article_scope_signals: list[str] = Field(default_factory=list)
     article_title: str | None = None
     section: str | None = None
     author: str | None = None
