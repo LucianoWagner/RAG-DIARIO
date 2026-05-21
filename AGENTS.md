@@ -1,28 +1,30 @@
 # Contexto para agentes - ProyectoRagFacultad2
 
-Este archivo guarda contexto operativo actualizado para continuar la migracion del RAG original de Docker hacia el RAG de Hemeroteca La Plata. Se debe ir completando a medida que avancen `PLAN_HEMEROTECA_RAG.md` y `FASE1B_SCRAPER_PAGINA12.md`.
+Este archivo guarda contexto operativo actualizado para continuar la migracion del RAG original de Docker hacia el RAG de Hemeroteca Argentina con Pagina/12. Se debe ir completando a medida que avancen `PLAN_HEMEROTECA_RAG.md`, `FASE1B_SCRAPER_PAGINA12.md` y `Fase1C.md`.
 
 ## Guia principal
 
 - Skill local: `SKILL.md`, nombre `rag-implementer`.
 - Plan general: `PLAN_HEMEROTECA_RAG.md`.
-- Fase especifica actual/complementaria: `FASE1B_SCRAPER_PAGINA12.md`.
+- Fase especifica actual/complementaria: `FASE1B_SCRAPER_PAGINA12.md` + `Fase1C.md`.
 - Implementar una fase por vez y mantener cambios chicos.
 - No reintroducir `translator.py`; el pipeline objetivo trabaja en espanol.
 - No tocar `data/raw/` manualmente salvo desde scrapers o pruebas controladas.
 
 ## Estado actual relevante
 
-Estamos trabajando sobre Fase 1 / Fase 1B.
+Estamos trabajando sobre Fase 1 / Fase 1B / Fase 1C.
 
 Objetivo de esta parte: probar un flujo minimo para una fecha concreta de Pagina/12:
 
 1. descubrir URLs de articulos de una fecha;
 2. descargar HTML real de esas URLs;
 3. parsear HTML con `trafilatura`;
-4. persistir texto limpio + metadata en `backend/data/parsed`.
+4. persistir texto limpio + metadata en `backend/data/parsed`;
+5. chunquear texto;
+6. enriquecer metadata con NER, gazetteer, scope por chunk y scope por articulo.
 
-Esto todavia no indexa en Qdrant. El paso siguiente despues de parsed es chunking, enrichment e indexacion.
+El stage `preview` no indexa en Qdrant. `all`/`index` ejecuta tambien indexacion.
 
 `backend/app/ingestion/run.py` ya fue adaptado para usar Pagina/12 como fuente principal. El scraper viejo de El Dia fue eliminado.
 
@@ -146,6 +148,8 @@ Texto limpio extraido por `trafilatura` + metadata. Este es el input esperado pa
 - `html_parser.py` usa `trafilatura.extract`.
 - El parser persiste JSON de parsed con escritura atomica.
 - El parser repara mojibake comun de HTML historico durante normalizacion.
+- El enrichment calcula `country_scope` y `scope_signals` para clasificar articulos vinculados con Argentina mediante cascada heuristica -> embeddings -> LLM local opcional.
+- El gazetteer activo es nacional: `backend/data/gazetteer/argentina.json`.
 
 ## Flujo completo de `run.py`
 
@@ -266,16 +270,18 @@ Importante: spaCy puede equivocarse. Por ejemplo puede detectar palabras comunes
 `gazetteer.py` carga:
 
 ```text
-backend/data/gazetteer/la_plata_partidos.json
+backend/data/gazetteer/argentina.json
 ```
 
 Busca menciones exactas, case-insensitive, de:
 
 ```text
-city
-neighborhoods
-nearby_partidos
-landmarks
+provinces
+cities
+institutions
+political_organizations
+clubs
+landmarks si existieran
 ```
 
 Si encuentra lugares, los guarda en:
@@ -290,13 +296,46 @@ Y elige:
 primary_location
 ```
 
-Regla actual:
+Regla actual de ubicacion:
 
-- si aparece `La Plata`, `primary_location = "La Plata"`;
-- si no aparece La Plata pero aparece otro lugar del gazetteer, usa el primero;
+- si aparece `Argentina`, `primary_location = "Argentina"`;
+- si no aparece Argentina pero aparece otro lugar del gazetteer, usa el primero;
 - si no aparece ningun lugar del gazetteer, `primary_location = null` y `location_mentions = []`.
 
-Esto explica casos como una nota nacional sobre Alfonsin/UCR: aunque sea de 2005 y Pagina/12, si el chunk no menciona La Plata, Berisso, Ensenada, barrios o landmarks cargados, los campos de ubicacion quedan vacios. Es esperado.
+Esto explica casos como una nota nacional sobre Alfonsin/UCR: aunque sea de 2005 y Pagina/12, si el chunk no menciona topónimos cargados, los campos de ubicacion quedan vacios. Es esperado.
+
+Importante: el matcher del gazetteer usa limites de palabra y normalizacion de acentos. No debe detectar `CABA` dentro de palabras como `caballito`; solo detecta `CABA` como termino independiente.
+
+### Country scope
+
+El sistema no depende de que el texto diga literalmente `Argentina`.
+
+`scope_classifier.py` clasifica cada chunk con:
+
+```text
+country_scope = argentina | international | unknown
+scope_signals = lista de senales usadas
+article_country_scope = argentina | international | unknown
+article_scope_signals = senales agregadas a nivel articulo
+```
+
+Clasificador actual (`Fase1C.md`):
+
+- Capa 1 heuristica: secciones nacionales y suplementos nacionales clasifican `argentina` por `seccion:<nombre>`.
+- Capa 1 tambien detecta señales en `location_mentions`, `organizations` y terminos nacionales.
+- `elmundo` sin señales argentinas ya no clasifica directo como `international`; queda `unknown` y pasa a embeddings si estan disponibles.
+- Chunks con menos de 100 caracteres quedan `unknown` directo.
+- Capa 2 embeddings: compara el chunk contra anclas argentinas, internacionales y `unknown`. Clasifica solo si el ganador supera al segundo por `SCOPE_EMBEDDING_THRESHOLD`.
+- Las senales de capa 2 son `emb_arg:<score>`, `emb_int:<score>`, `emb_unknown:<score>` y `emb_margin:<margin>`.
+- Capa 3 LLM local: solo se usa en zona gris de embeddings, contra Ollama local si `SCOPE_LLM_ENABLED=true`.
+- El prompt de capa 3 tiene few-shot estricto para evitar falsos positivos en textos literarios/conceptuales sin evidencia argentina.
+- Modelo LLM default: `qwen2.5:3b-instruct`, configurable con `SCOPE_LLM_MODEL`.
+- Si el LLM esta deshabilitado, no disponible, el texto es corto o responde algo invalido, el resultado queda `unknown` y deja una senal auditable (`llm_skipped:*`, `llm_error:*` o `llm_local:<modelo>:unknown`).
+- Un chunk puede tener `country_scope="argentina"` y a la vez `location_mentions=[]`. Ejemplo: una nota de `elpais` sobre Alfonsin/UCR sin topónimos explícitos.
+- `metadata.py` agrega scope por articulo agrupando por `source_id`. Un chunk puede quedar `country_scope="unknown"` pero `article_country_scope="argentina"` si otro chunk del mismo articulo tiene evidencia fuerte.
+
+- Un unico `country_scope="argentina"` decidido solo por LLM no alcanza para elevar todo el articulo; se requieren senales no LLM o multiples chunks LLM.
+- Caso esperado: un chunk conceptual puede quedar `country_scope="unknown"` y `article_country_scope="argentina"` si otros chunks del mismo articulo mencionan Argentina, Rosario, CABA, instituciones o terminos argentinos.
 
 ### `--stage preview`
 
@@ -314,6 +353,14 @@ scrape -> parse -> chunk -> enrich -> imprimir chunks enriquecidos
 
 No indexa en Qdrant.
 
+El preview debe mostrar `country_scope`, `scope_signals`, `article_country_scope`, `article_scope_signals`, `section`, `location_mentions`, `organizations` y `persons`.
+
+Para probar secciones ambiguas y evitar que los primeros articulos sean todos `elpais`, se puede usar `--sections`:
+
+```powershell
+python -m app.ingestion.run --stage preview --date 06-03-2005 --sections suplementos/libros,elmundo,cultura,contratapa --max-articles 5 --force --preview-limit 40 --preview-chars 700
+```
+
 ### `--stage all`
 
 Ejecuta todo:
@@ -324,21 +371,64 @@ scrape -> parse -> chunk -> enrich -> index
 
 Solo usar cuando se quiera guardar en Qdrant.
 
+Para indexacion definitiva se usa `--reset-index` si se quiere borrar/recrear la coleccion Qdrant antes de cargar. `--force` solo redescarga/redescarga archivos HTML existentes; no debe usarse como sinonimo de reset de Qdrant.
+
+Por defecto la indexacion guarda solo chunks cuyo `article_country_scope` entra en `--index-scope argentina`. Para mayor recall se puede usar `--index-scope argentina,unknown`; para debug completo, `--index-scope all`.
+
+Carga anual 2005 recomendada:
+
+```powershell
+python -m app.ingestion.run --stage all --year 2005 --reset-index --index-scope argentina
+```
+
+Carga por rango, util para hacerlo por mes:
+
+```powershell
+python -m app.ingestion.run --stage all --date-from 01-01-2005 --date-to 31-01-2005 --reset-index --index-scope argentina
+python -m app.ingestion.run --stage all --date-from 01-02-2005 --date-to 28-02-2005 --index-scope argentina
+```
+
+Estructura de datos esperada:
+
+```text
+data/raw/pagina12/YYYY/MM/urls_DD-MM-YYYY.json
+backend/data/raw/pagina12/YYYY/MM/*.html
+backend/data/raw/pagina12/YYYY/MM/*.json
+backend/data/parsed/pagina12/YYYY/MM/documents_DD-MM-YYYY.json
+```
+
+Qdrant recibe payload completo del chunk, incluyendo `country_scope`, `article_country_scope`, fechas, seccion, entidades, ubicaciones y `text`.
+
+Para inspeccionar lo cargado en Qdrant:
+
+```powershell
+python -m app.retrieval.inspect_store --date 2005-01-02 --article-scope argentina --limit 10 --chars 700
+```
+
+Filtros utiles:
+
+```powershell
+python -m app.retrieval.inspect_store --date 2005-01-02 --section elpais --limit 5
+python -m app.retrieval.inspect_store --article-scope argentina --scope unknown --limit 10
+python -m app.retrieval.inspect_store --limit 20 --chars 300
+```
+
 ## Tests utiles
 
 Desde `E:\ProyectoRagFacultad2`:
 
 ```powershell
-python -m pytest backend\tests\test_pagina12_scraper.py backend\tests\test_html_parser.py -q
+python -m pytest backend\tests\test_pagina12_scraper.py backend\tests\test_html_parser.py backend\tests\test_run_ingestion.py backend\tests\test_gazetteer.py backend\tests\test_scope_classifier.py backend\tests\test_metadata_enrichment.py -q
 ```
 
 Ultima verificacion conocida:
 
 ```text
-16 passed
+40 passed, 1 skipped
 ```
 
 ## Pendientes inmediatos
 
-- Avanzar con chunking, enrichment con NER/gazetteer e indexacion en Qdrant para los documentos parseados.
+- Validar con `preview` varias fechas/secciones antes de indexar definitivamente en Qdrant.
+- Revisar si la fase siguiente debe filtrar indexacion por `article_country_scope="argentina"` o conservar tambien `unknown` para analisis posterior.
 - Mantener `PLAN_HEMEROTECA_RAG.md` como guia principal y completar este `AGENTS.md` cuando haya decisiones nuevas.

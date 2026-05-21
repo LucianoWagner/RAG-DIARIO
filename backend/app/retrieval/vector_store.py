@@ -69,6 +69,7 @@ def ensure_collection() -> None:
     existing = {collection.name for collection in client.get_collections().collections}
     if settings.qdrant_collection in existing:
         logger.info(f"Coleccion existente: {settings.qdrant_collection}")
+        ensure_payload_indexes()
         return
 
     logger.info(f"Creando coleccion Qdrant | vector_size={vector_size}")
@@ -80,30 +81,47 @@ def ensure_collection() -> None:
         ),
     )
 
+    ensure_payload_indexes()
+
+
+def ensure_payload_indexes() -> None:
+    settings = get_settings()
+    client = get_qdrant_client()
     for field_name, schema in (
         ("year", qmodels.IntegerIndexParams(type="integer")),
         ("decade", qmodels.IntegerIndexParams(type="integer")),
         ("newspaper", qmodels.KeywordIndexParams(type="keyword")),
+        ("section", qmodels.KeywordIndexParams(type="keyword")),
+        ("country_scope", qmodels.KeywordIndexParams(type="keyword")),
+        ("article_country_scope", qmodels.KeywordIndexParams(type="keyword")),
         ("primary_location", qmodels.KeywordIndexParams(type="keyword")),
         ("persons", qmodels.KeywordIndexParams(type="keyword")),
+        ("organizations", qmodels.KeywordIndexParams(type="keyword")),
+        ("publication_date", qmodels.KeywordIndexParams(type="keyword")),
     ):
-        client.create_payload_index(
-            collection_name=settings.qdrant_collection,
-            field_name=field_name,
-            field_schema=schema,
-            wait=True,
-        )
-        logger.info(f"Indice payload creado: {field_name}")
+        try:
+            client.create_payload_index(
+                collection_name=settings.qdrant_collection,
+                field_name=field_name,
+                field_schema=schema,
+                wait=True,
+            )
+            logger.info(f"Indice payload creado: {field_name}")
+        except Exception as exc:
+            logger.debug(f"Indice payload omitido/existente {field_name}: {exc}")
 
 
 def index_documents(chunks: list[Document], force: bool = False) -> int:
     settings = get_settings()
     client = get_qdrant_client()
-    ensure_collection()
 
     if force:
         logger.warning(f"force=True | borrando coleccion {settings.qdrant_collection}")
-        client.delete_collection(settings.qdrant_collection)
+        existing = {collection.name for collection in client.get_collections().collections}
+        if settings.qdrant_collection in existing:
+            client.delete_collection(settings.qdrant_collection)
+        ensure_collection()
+    else:
         ensure_collection()
 
     if not chunks:

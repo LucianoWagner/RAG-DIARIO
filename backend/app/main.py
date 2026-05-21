@@ -3,6 +3,7 @@ FastAPI entrypoint for the Hemeroteca RAG backend.
 """
 
 import time
+from datetime import date
 from functools import lru_cache
 
 from fastapi import BackgroundTasks, FastAPI
@@ -53,9 +54,20 @@ async def query_rag(question: str):
 
 @app.post("/ingest")
 async def ingest_corpus(background_tasks: BackgroundTasks, force: bool = False, year: int | None = None):
-    from app.ingestion.run import run_ingestion
+    from app.ingestion.run import run_ingestion, run_ingestion_range
 
-    background_tasks.add_task(run_ingestion, force=force, year=year)
+    if year:
+        background_tasks.add_task(
+            run_ingestion_range,
+            start_date=date(year, 1, 1),
+            end_date=date(year, 12, 31),
+            force=force,
+            reset_index=False,
+            stage="all",
+            index_scope="argentina",
+        )
+    else:
+        background_tasks.add_task(run_ingestion, force=force, stage="all", index_scope="argentina")
     return {
         "status": "processing",
         "message": "Ingesta iniciada en segundo plano.",

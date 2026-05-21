@@ -6,6 +6,8 @@ import argparse
 import json
 import sys
 import time
+from datetime import date as date_type
+from datetime import timedelta
 from pathlib import Path
 
 from langchain_core.documents import Document
@@ -81,12 +83,46 @@ def _preview_chunks(chunks: list[Document], limit: int, content_chars: int) -> N
     logger.info("=" * 72)
 
 
+def _iter_dates(start_date: date_type, end_date: date_type):
+    current = start_date
+    while current <= end_date:
+        yield current
+        current += timedelta(days=1)
+
+
+def _parse_cli_date(raw_date: str) -> date_type:
+    return parse_date_arg(raw_date)
+
+
+def _filter_chunks_for_index(chunks: list[Document], index_scope: str) -> list[Document]:
+    normalized = (index_scope or "argentina").strip().lower()
+    if normalized == "all":
+        return chunks
+
+    allowed_scopes = {scope.strip() for scope in normalized.split(",") if scope.strip()}
+    if not allowed_scopes:
+        allowed_scopes = {"argentina"}
+
+    filtered = [
+        chunk
+        for chunk in chunks
+        if str(chunk.metadata.get("article_country_scope") or chunk.metadata.get("country_scope") or "").lower()
+        in allowed_scopes
+    ]
+    logger.info(
+        f"Filtro index_scope={index_scope} | chunks_indexables={len(filtered)}/{len(chunks)}"
+    )
+    return filtered
+
+
 def run_ingestion(
     force: bool = False,
+    reset_index: bool = False,
     stage: str = "all",
     date: str | None = None,
     max_articles: int | None = None,
     sections: list[str] | None = None,
+    index_scope: str = "argentina",
     preview_limit: int = 3,
     preview_chars: int = 800,
 ) -> list[Document]:
@@ -113,8 +149,12 @@ def run_ingestion(
 
     logger.info("=" * 72)
     logger.info("INGESTA HEMEROTECA - FASE 1")
-    logger.info(f"source=pagina12 | stage={stage} | date={target_date} | force={force}")
+    logger.info(
+        f"source=pagina12 | stage={stage} | date={target_date} | "
+        f"force_download={force} | reset_index={reset_index}"
+    )
     logger.info(f"sections={','.join(sections or ['*'])} | max_articles={max_articles}")
+    logger.info(f"index_scope={index_scope}")
     logger.info(f"urls_path={urls_path}")
     logger.info(f"raw_date_dir={raw_date_dir}")
     logger.info(f"parsed_output={parsed_output_path}")
@@ -171,22 +211,82 @@ def run_ingestion(
     logger.info("[5/5] Indexando en Qdrant")
     from app.retrieval.vector_store import index_documents
 
-    indexed_count = index_documents(chunks, force=force)
+    chunks_to_index = _filter_chunks_for_index(chunks, index_scope=index_scope)
+    indexed_count = index_documents(chunks_to_index, force=reset_index)
     logger.info(f"[5/5] Indexacion terminada | puntos indexados={indexed_count}")
     logger.info(f"INGESTA COMPLETA | tiempo_total={time.perf_counter() - started_at:.1f}s")
     return chunks
 
 
+def run_ingestion_range(
+    start_date: date_type,
+    end_date: date_type,
+    force: bool = False,
+    reset_index: bool = False,
+    stage: str = "all",
+    max_articles: int | None = None,
+    sections: list[str] | None = None,
+    index_scope: str = "argentina",
+    continue_on_error: bool = True,
+) -> list[Document]:
+    all_chunks: list[Document] = []
+    total_days = (end_date - start_date).days + 1
+    logger.info(
+        f"INGESTA POR RANGO | desde={start_date:%d-%m-%Y} | "
+        f"hasta={end_date:%d-%m-%Y} | dias={total_days}"
+    )
+
+    for day_index, current_date in enumerate(_iter_dates(start_date, end_date), start=1):
+        raw_date = current_date.strftime("%d-%m-%Y")
+        logger.info("=" * 72)
+        logger.info(f"DIA {day_index}/{total_days} | date={raw_date}")
+        try:
+            chunks = run_ingestion(
+                force=force,
+                reset_index=reset_index and day_index == 1,
+                stage=stage,
+                date=raw_date,
+                max_articles=max_articles,
+                sections=sections,
+                index_scope=index_scope,
+            )
+            all_chunks.extend(chunks)
+        except Exception as exc:
+            logger.exception(f"Fallo ingesta date={raw_date}: {exc}")
+            if not continue_on_error:
+                raise
+
+    logger.info(
+        f"INGESTA POR RANGO TERMINADA | desde={start_date:%d-%m-%Y} | "
+        f"hasta={end_date:%d-%m-%Y} | chunks_totales={len(all_chunks)}"
+    )
+    return all_chunks
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--reset-index", action="store_true", help="Borra y recrea la coleccion Qdrant antes de indexar.")
     parser.add_argument("--stage", choices=("all", "scrape", "parse", "enrich", "preview", "index"), default="all")
     parser.add_argument("--date", default=None, help="Fecha Pagina/12 en formato DD-MM-YYYY.")
+    parser.add_argument("--year", type=int, default=None, help="Procesa un año completo, ej: 2005.")
+    parser.add_argument("--date-from", default=None, help="Fecha inicial en formato DD-MM-YYYY.")
+    parser.add_argument("--date-to", default=None, help="Fecha final en formato DD-MM-YYYY.")
     parser.add_argument("--max-articles", type=int, default=None, help="Limite opcional para pruebas.")
     parser.add_argument(
         "--sections",
         default=None,
         help="Lista separada por coma de secciones a procesar, ej: elmundo,deportes,suplementos/libros.",
+    )
+    parser.add_argument(
+        "--index-scope",
+        default="argentina",
+        help="Scopes de articulo a indexar: argentina, unknown, international, argentina,unknown o all.",
+    )
+    parser.add_argument(
+        "--stop-on-error",
+        action="store_true",
+        help="Detiene la ingesta por rango ante el primer error.",
     )
     parser.add_argument("--preview-limit", type=int, default=3, help="Cantidad de chunks enriquecidos a imprimir.")
     parser.add_argument("--preview-chars", type=int, default=800, help="Caracteres de contenido a imprimir por chunk.")
@@ -196,12 +296,42 @@ def main() -> None:
     if stage == "index":
         stage = "all"
 
+    sections = args.sections.split(",") if args.sections else None
+    if args.year or args.date_from or args.date_to:
+        if args.year:
+            start_date = date_type(args.year, 1, 1)
+            end_date = date_type(args.year, 12, 31)
+        else:
+            start_date = _parse_cli_date(args.date_from)
+            end_date = _parse_cli_date(args.date_to)
+        if args.date_from:
+            start_date = _parse_cli_date(args.date_from)
+        if args.date_to:
+            end_date = _parse_cli_date(args.date_to)
+        if end_date < start_date:
+            raise ValueError("--date-to no puede ser anterior a --date-from")
+
+        run_ingestion_range(
+            start_date=start_date,
+            end_date=end_date,
+            force=args.force,
+            reset_index=args.reset_index,
+            stage=stage,
+            max_articles=args.max_articles,
+            sections=sections,
+            index_scope=args.index_scope,
+            continue_on_error=not args.stop_on_error,
+        )
+        return
+
     run_ingestion(
         force=args.force,
+        reset_index=args.reset_index,
         stage=stage,
         date=args.date,
         max_articles=args.max_articles,
-        sections=args.sections.split(",") if args.sections else None,
+        sections=sections,
+        index_scope=args.index_scope,
         preview_limit=args.preview_limit,
         preview_chars=args.preview_chars,
     )
