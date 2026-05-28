@@ -142,7 +142,9 @@ def _resolve_article_scope(chunks: list[Document]) -> tuple[str, list[str]]:
 
 
 def _is_non_llm_argentina_signal(signal: str) -> bool:
-    return signal.startswith(("seccion:", "gazetteer:", "institution:", "term:", "emb_"))
+    return signal.startswith(
+        ("seccion:", "gazetteer:", "institution:", "political_org:", "club:", "term:", "emb_")
+    )
 
 
 def _article_signal(chunk_ref: str, signals: list[str]) -> str:

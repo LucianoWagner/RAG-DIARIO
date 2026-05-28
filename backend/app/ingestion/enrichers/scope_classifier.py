@@ -104,7 +104,7 @@ Responde solo con una palabra:"""
 
 
 class Embedder(Protocol):
-    def embed_query(self, query: str) -> list[float]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         ...
 
 
@@ -173,11 +173,23 @@ class ScopeClassifier:
         self._arg_anchor_embeddings: list[list[float]] = []
         self._int_anchor_embeddings: list[list[float]] = []
         self._unknown_anchor_embeddings: list[list[float]] = []
+        self._direct_argentina_sections = _normalized_set(
+            self.gazetteer.direct_argentina_sections if self.gazetteer else []
+        )
+        self._direct_institution_terms = _direct_text_terms(
+            self.gazetteer.institutions if self.gazetteer else []
+        )
+        self._direct_political_org_terms = _direct_text_terms(
+            self.gazetteer.political_organizations if self.gazetteer else []
+        )
+        self._direct_ambiguous_institution_terms = _direct_text_terms(
+            self.gazetteer.ambiguous_institutions if self.gazetteer else []
+        )
 
         if self.embedder is not None:
-            self._arg_anchor_embeddings = [self._embed(anchor) for anchor in ANCLAS_ARGENTINA]
-            self._int_anchor_embeddings = [self._embed(anchor) for anchor in ANCLAS_INTERNACIONAL]
-            self._unknown_anchor_embeddings = [self._embed(anchor) for anchor in ANCLAS_UNKNOWN]
+            self._arg_anchor_embeddings = self._embed_many(ANCLAS_ARGENTINA)
+            self._int_anchor_embeddings = self._embed_many(ANCLAS_INTERNACIONAL)
+            self._unknown_anchor_embeddings = self._embed_many(ANCLAS_UNKNOWN)
             logger.info(
                 "Anclas de embeddings precalculadas (%s argentina, %s internacional, %s unknown)",
                 len(self._arg_anchor_embeddings),
@@ -201,22 +213,25 @@ class ScopeClassifier:
             return heuristic.country_scope, heuristic.scope_signals
 
         logger.debug("[Capa1] scope=unknown signals=%s", heuristic.scope_signals)
-        embedding_decision = self._classify_embeddings(chunk_text)
+        heuristic_signals = heuristic.scope_signals
+        embedding_decision = self._classify_embeddings(chunk_text, metadata)
         embedding_result = embedding_decision.result
         if embedding_decision.final:
-            return embedding_result.country_scope, embedding_result.scope_signals
+            return embedding_result.country_scope, heuristic_signals + embedding_result.scope_signals
 
         llm_result = self._classify_llm(chunk_text)
+        base_signals = heuristic_signals + embedding_result.scope_signals
         if llm_result.scope_signals:
-            return llm_result.country_scope, embedding_result.scope_signals + llm_result.scope_signals
-        return llm_result.country_scope, embedding_result.scope_signals
+            return llm_result.country_scope, base_signals + llm_result.scope_signals
+        return llm_result.country_scope, base_signals
 
     def _classify_heuristic(self, text: str, metadata: dict) -> ScopeResult:
         section = _normalize_section(metadata.get("section"))
-        if section in _normalized_set(self.gazetteer.direct_argentina_sections if self.gazetteer else []):
+        if section in self._direct_argentina_sections:
             return ScopeResult("argentina", [f"seccion:{section}"])
 
-        signals: list[str] = []
+        strong_signals: list[str] = []
+        weak_signals: list[str] = []
         location_mentions = _as_list(metadata.get("location_mentions"))
         organizations = _as_list(metadata.get("organizations"))
         haystack = " ".join(
@@ -231,22 +246,43 @@ class ScopeClassifier:
         )
 
         for location in location_mentions:
-            if location not in signals:
-                signals.append(f"gazetteer:{location}")
+            if self.gazetteer is not None and not self.gazetteer.is_known_location(location):
+                continue
+            _append_signal(strong_signals, f"gazetteer:{location}")
 
+        organization_text = " ".join(organizations)
         gazetteer_institutions = self.gazetteer.institutions if self.gazetteer else []
-        for org in _contains_any(" ".join(organizations), gazetteer_institutions):
-            signals.append(f"institution:{org}")
+        gazetteer_political_orgs = self.gazetteer.political_organizations if self.gazetteer else []
+        gazetteer_clubs = self.gazetteer.clubs if self.gazetteer else []
+        gazetteer_ambiguous_institutions = self.gazetteer.ambiguous_institutions if self.gazetteer else []
+        gazetteer_contextual_terms = self.gazetteer.contextual_terms if self.gazetteer else []
+        for org in _contains_any(organization_text, gazetteer_institutions):
+            _append_signal(strong_signals, f"institution:{org}")
+        for org in _contains_any(organization_text, gazetteer_political_orgs):
+            _append_signal(strong_signals, f"political_org:{org}")
+        for club in _contains_any(organization_text, gazetteer_clubs):
+            _append_signal(strong_signals, f"club:{club}")
+        for org in _contains_any(organization_text, gazetteer_ambiguous_institutions):
+            _append_signal(weak_signals, f"weak_institution:{org}")
+
+        for org in _contains_any(haystack, self._direct_institution_terms):
+            _append_signal(strong_signals, f"institution:{org}")
+        for org in _contains_any(haystack, self._direct_political_org_terms):
+            _append_signal(strong_signals, f"political_org:{org}")
+        for org in _contains_any(haystack, self._direct_ambiguous_institution_terms):
+            _append_signal(weak_signals, f"weak_institution:{org}")
 
         gazetteer_keywords = self.gazetteer.keywords if self.gazetteer else []
         for term in _contains_any(haystack, gazetteer_keywords):
-            signals.append(f"term:{term}")
+            _append_signal(strong_signals, f"term:{term}")
+        for term in _contains_any(haystack, gazetteer_contextual_terms):
+            _append_signal(weak_signals, f"contextual_term:{term}")
 
-        if signals:
-            return ScopeResult("argentina", signals)
-        return ScopeResult("unknown", [])
+        if strong_signals:
+            return ScopeResult("argentina", strong_signals + weak_signals)
+        return ScopeResult("unknown", weak_signals)
 
-    def _classify_embeddings(self, text: str) -> EmbeddingDecision:
+    def _classify_embeddings(self, text: str, metadata: dict) -> EmbeddingDecision:
         if (
             self.embedder is None
             or not self._arg_anchor_embeddings
@@ -255,7 +291,8 @@ class ScopeClassifier:
         ):
             return EmbeddingDecision(ScopeResult("unknown", []), final=False)
 
-        chunk_embedding = self._embed(text)
+        chunk_embedding = self._embed_many([text])[0]
+        metadata["_index_vector"] = chunk_embedding
         score_arg = max(_cosine_similarity(chunk_embedding, anchor) for anchor in self._arg_anchor_embeddings)
         score_int = max(_cosine_similarity(chunk_embedding, anchor) for anchor in self._int_anchor_embeddings)
         score_unknown = max(
@@ -311,8 +348,8 @@ class ScopeClassifier:
         self._llm_cache[digest] = result
         return result
 
-    def _embed(self, text: str) -> list[float]:
-        return list(self.embedder.embed_query(text)) if self.embedder else []
+    def _embed_many(self, texts: list[str]) -> list[list[float]]:
+        return [list(vector) for vector in self.embedder.embed_documents(texts)] if self.embedder else []
 
 
 def build_default_llm_client() -> ScopeLLMClient | None:
@@ -373,10 +410,23 @@ def _contains_any(text: str, values: list[str] | set[str]) -> list[str]:
 
 
 def _contains_term(normalized_text: str, normalized_term: str) -> bool:
-    if len(normalized_term) <= 3 or normalized_term.isupper():
-        pattern = rf"(?<!\w){re.escape(normalized_term)}(?!\w)"
-        return re.search(pattern, normalized_text, flags=re.IGNORECASE) is not None
-    return normalized_term in normalized_text
+    escaped = re.escape(normalized_term).replace(r"\ ", r"\s+")
+    pattern = rf"(?<!\w){escaped}(?!\w)"
+    return re.search(pattern, normalized_text, flags=re.IGNORECASE) is not None
+
+
+def _direct_text_terms(values: list[str]) -> list[str]:
+    terms: list[str] = []
+    for value in values:
+        normalized = _strip_accents(value).strip()
+        if " " in normalized or len(normalized) > 4:
+            terms.append(value)
+    return terms
+
+
+def _append_signal(signals: list[str], signal: str) -> None:
+    if signal and signal not in signals:
+        signals.append(signal)
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:

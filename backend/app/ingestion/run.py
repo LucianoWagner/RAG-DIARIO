@@ -51,36 +51,75 @@ def _parse_html_for_date(raw_date_dir: Path, parsed_date) -> list[Document]:
     return _parse_html_files(html_files)
 
 
+def _preview_metadata(chunk: Document) -> dict:
+    return {
+        "chunk_id": chunk.metadata.get("chunk_id"),
+        "source_id": chunk.metadata.get("source_id"),
+        "newspaper": chunk.metadata.get("newspaper"),
+        "publication_date": chunk.metadata.get("publication_date"),
+        "year": chunk.metadata.get("year"),
+        "decade": chunk.metadata.get("decade"),
+        "article_title": chunk.metadata.get("article_title"),
+        "section": chunk.metadata.get("section"),
+        "source_url": chunk.metadata.get("source_url"),
+        "country_scope": chunk.metadata.get("country_scope"),
+        "scope_signals": chunk.metadata.get("scope_signals"),
+        "article_country_scope": chunk.metadata.get("article_country_scope"),
+        "article_scope_signals": chunk.metadata.get("article_scope_signals"),
+        "primary_location": chunk.metadata.get("primary_location"),
+        "location_mentions": chunk.metadata.get("location_mentions"),
+        "persons": chunk.metadata.get("persons"),
+        "organizations": chunk.metadata.get("organizations"),
+        "chunk_index": chunk.metadata.get("chunk_index"),
+        "total_chunks": chunk.metadata.get("total_chunks"),
+    }
+
+
+def _log_preview_chunk(label: str, chunk: Document, content_chars: int) -> None:
+    logger.info("-" * 72)
+    logger.info(label)
+    logger.info("metadata=" + json.dumps(_preview_metadata(chunk), ensure_ascii=False, indent=2))
+    logger.info(f"contenido={chunk.page_content[:content_chars]}")
+
+
+def _scope_signals(chunk: Document) -> list[str]:
+    values = chunk.metadata.get("scope_signals") or []
+    return [str(value) for value in values]
+
+
+def _first_chunk_with_signal(chunks: list[Document], prefixes: tuple[str, ...]) -> Document | None:
+    for chunk in chunks:
+        if any(signal.startswith(prefixes) for signal in _scope_signals(chunk)):
+            return chunk
+    return None
+
+
+def _preview_signal_cases(chunks: list[Document], content_chars: int) -> None:
+    cases = [
+        ("CASO CAPA 1 - SECCION", ("seccion:",)),
+        ("CASO CAPA 1 - GAZETTEER/TERMINOS", ("gazetteer:", "term:", "institution:", "political_org:", "club:")),
+        ("CASO CAPA 2 - EMBEDDINGS", ("emb_",)),
+        ("CASO CAPA 3 - LLM", ("llm_",)),
+    ]
+    logger.info("=" * 72)
+    logger.info("PREVIEW CASOS POR SENAL")
+    for label, prefixes in cases:
+        chunk = _first_chunk_with_signal(chunks, prefixes)
+        if chunk is None:
+            logger.info("-" * 72)
+            logger.info(f"{label}: no encontrado en esta muestra")
+            continue
+        _log_preview_chunk(label, chunk, content_chars)
+    logger.info("=" * 72)
+
+
 def _preview_chunks(chunks: list[Document], limit: int, content_chars: int) -> None:
     logger.info("=" * 72)
     logger.info(f"PREVIEW CHUNKS ENRIQUECIDOS | mostrando={min(limit, len(chunks))}/{len(chunks)}")
     for index, chunk in enumerate(chunks[:limit], start=1):
-        preview_metadata = {
-            "chunk_id": chunk.metadata.get("chunk_id"),
-            "source_id": chunk.metadata.get("source_id"),
-            "newspaper": chunk.metadata.get("newspaper"),
-            "publication_date": chunk.metadata.get("publication_date"),
-            "year": chunk.metadata.get("year"),
-            "decade": chunk.metadata.get("decade"),
-            "article_title": chunk.metadata.get("article_title"),
-            "section": chunk.metadata.get("section"),
-            "source_url": chunk.metadata.get("source_url"),
-            "country_scope": chunk.metadata.get("country_scope"),
-            "scope_signals": chunk.metadata.get("scope_signals"),
-            "article_country_scope": chunk.metadata.get("article_country_scope"),
-            "article_scope_signals": chunk.metadata.get("article_scope_signals"),
-            "primary_location": chunk.metadata.get("primary_location"),
-            "location_mentions": chunk.metadata.get("location_mentions"),
-            "persons": chunk.metadata.get("persons"),
-            "organizations": chunk.metadata.get("organizations"),
-            "chunk_index": chunk.metadata.get("chunk_index"),
-            "total_chunks": chunk.metadata.get("total_chunks"),
-        }
-        logger.info("-" * 72)
-        logger.info(f"CHUNK {index}")
-        logger.info("metadata=" + json.dumps(preview_metadata, ensure_ascii=False, indent=2))
-        logger.info(f"contenido={chunk.page_content[:content_chars]}")
+        _log_preview_chunk(f"CHUNK {index}", chunk, content_chars)
     logger.info("=" * 72)
+    _preview_signal_cases(chunks, content_chars)
 
 
 def _iter_dates(start_date: date_type, end_date: date_type):
@@ -121,6 +160,7 @@ def run_ingestion(
     stage: str = "all",
     date: str | None = None,
     max_articles: int | None = None,
+    max_articles_per_section: int | None = None,
     sections: list[str] | None = None,
     index_scope: str = "argentina",
     preview_limit: int = 3,
@@ -153,7 +193,10 @@ def run_ingestion(
         f"source=pagina12 | stage={stage} | date={target_date} | "
         f"force_download={force} | reset_index={reset_index}"
     )
-    logger.info(f"sections={','.join(sections or ['*'])} | max_articles={max_articles}")
+    logger.info(
+        f"sections={','.join(sections or ['*'])} | max_articles={max_articles} | "
+        f"max_articles_per_section={max_articles_per_section}"
+    )
     logger.info(f"index_scope={index_scope}")
     logger.info(f"urls_path={urls_path}")
     logger.info(f"raw_date_dir={raw_date_dir}")
@@ -170,6 +213,7 @@ def run_ingestion(
             urls_path=urls_path,
             force=force,
             max_articles=max_articles,
+            max_articles_per_section=max_articles_per_section,
             sections=sections,
         )
         logger.info(f"[1/5] Scraping terminado | archivos HTML disponibles={len(scraped_files)}")
@@ -225,9 +269,12 @@ def run_ingestion_range(
     reset_index: bool = False,
     stage: str = "all",
     max_articles: int | None = None,
+    max_articles_per_section: int | None = None,
     sections: list[str] | None = None,
     index_scope: str = "argentina",
     continue_on_error: bool = True,
+    preview_limit: int = 3,
+    preview_chars: int = 800,
 ) -> list[Document]:
     all_chunks: list[Document] = []
     total_days = (end_date - start_date).days + 1
@@ -247,8 +294,11 @@ def run_ingestion_range(
                 stage=stage,
                 date=raw_date,
                 max_articles=max_articles,
+                max_articles_per_section=max_articles_per_section,
                 sections=sections,
                 index_scope=index_scope,
+                preview_limit=preview_limit,
+                preview_chars=preview_chars,
             )
             all_chunks.extend(chunks)
         except Exception as exc:
@@ -273,6 +323,12 @@ def main() -> None:
     parser.add_argument("--date-from", default=None, help="Fecha inicial en formato DD-MM-YYYY.")
     parser.add_argument("--date-to", default=None, help="Fecha final en formato DD-MM-YYYY.")
     parser.add_argument("--max-articles", type=int, default=None, help="Limite opcional para pruebas.")
+    parser.add_argument(
+        "--max-articles-per-section",
+        type=int,
+        default=None,
+        help="Limite opcional de articulos por seccion para muestras balanceadas.",
+    )
     parser.add_argument(
         "--sections",
         default=None,
@@ -318,9 +374,12 @@ def main() -> None:
             reset_index=args.reset_index,
             stage=stage,
             max_articles=args.max_articles,
+            max_articles_per_section=args.max_articles_per_section,
             sections=sections,
             index_scope=args.index_scope,
             continue_on_error=not args.stop_on_error,
+            preview_limit=args.preview_limit,
+            preview_chars=args.preview_chars,
         )
         return
 
@@ -330,6 +389,7 @@ def main() -> None:
         stage=stage,
         date=args.date,
         max_articles=args.max_articles,
+        max_articles_per_section=args.max_articles_per_section,
         sections=sections,
         index_scope=args.index_scope,
         preview_limit=args.preview_limit,

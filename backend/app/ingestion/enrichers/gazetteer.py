@@ -6,6 +6,7 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass
+from dataclasses import field
 from functools import lru_cache
 from pathlib import Path
 
@@ -19,6 +20,19 @@ class Gazetteer:
     institutions: list[str]
     keywords: list[str]
     direct_argentina_sections: list[str]
+    political_organizations: list[str] = field(default_factory=list)
+    clubs: list[str] = field(default_factory=list)
+    ambiguous_institutions: list[str] = field(default_factory=list)
+    contextual_terms: list[str] = field(default_factory=list)
+    non_direct_sections: list[str] = field(default_factory=list)
+    _normalized_aliases: set[str] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._normalized_aliases = {
+            _strip_accents(alias).lower().strip()
+            for alias in self.aliases
+            if alias and _strip_accents(alias).strip()
+        }
 
     def find_locations(self, text: str) -> list[str]:
         normalized_text = _strip_accents(text).lower()
@@ -33,6 +47,10 @@ class Gazetteer:
         if self.city in locations:
             return self.city
         return locations[0] if locations else None
+
+    def is_known_location(self, value: str) -> bool:
+        normalized_value = _strip_accents(value).lower().strip()
+        return bool(normalized_value) and normalized_value in self._normalized_aliases
 
 
 @lru_cache()
@@ -49,16 +67,21 @@ def load_gazetteer() -> Gazetteer:
     aliases.extend(data.get("neighborhoods", []))
     aliases.extend(data.get("nearby_partidos", []))
     aliases.extend(data.get("landmarks", []))
-    institutions = []
-    institutions.extend(data.get("institutions", []))
-    institutions.extend(data.get("political_organizations", []))
-    institutions.extend(data.get("clubs", []))
+    institutions = data.get("strong_institutions") or data.get("institutions", [])
+    political_organizations = data.get("strong_political_organizations") or data.get("political_organizations", [])
+    clubs = data.get("strong_clubs") or data.get("clubs", [])
+    keywords = data.get("strong_terms") or data.get("keywords", [])
     return Gazetteer(
         city=data["city"],
         aliases=aliases,
         institutions=institutions,
-        keywords=data.get("keywords", []),
+        keywords=keywords,
         direct_argentina_sections=data.get("direct_argentina_sections", []),
+        political_organizations=political_organizations,
+        clubs=clubs,
+        ambiguous_institutions=data.get("ambiguous_institutions", []),
+        contextual_terms=data.get("contextual_terms", []),
+        non_direct_sections=data.get("non_direct_sections", []),
     )
 
 

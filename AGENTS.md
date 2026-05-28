@@ -322,11 +322,15 @@ article_scope_signals = senales agregadas a nivel articulo
 Clasificador actual (`Fase1C.md`):
 
 - Capa 1 heuristica: secciones nacionales y suplementos nacionales clasifican `argentina` por `seccion:<nombre>`.
-- Capa 1 tambien detecta señales en `location_mentions`, `organizations` y terminos nacionales.
+- Capa 1 distingue senales fuertes y debiles. Senales fuertes: ubicaciones argentinas validadas, instituciones inequivocas argentinas, organizaciones politicas argentinas, clubes argentinos detectados como organizacion y terminos explicitamente argentinos.
+- Senales debiles como `weak_institution:Senado`, `weak_institution:Congreso` o `contextual_term:derechos humanos` no clasifican `argentina` por si solas; quedan auditadas y el chunk pasa a embeddings/LLM.
+- Secciones no directas como `elmundo`, `espectaculos`, `contratapa`, `cultura`, `plastica`, `psicologia`, `deportes`, `suplementos/libero` y `suplementos/libros` nunca clasifican por seccion sola.
 - `elmundo` sin señales argentinas ya no clasifica directo como `international`; queda `unknown` y pasa a embeddings si estan disponibles.
 - Chunks con menos de 100 caracteres quedan `unknown` directo.
 - Capa 2 embeddings: compara el chunk contra anclas argentinas, internacionales y `unknown`. Clasifica solo si el ganador supera al segundo por `SCOPE_EMBEDDING_THRESHOLD`.
 - Las senales de capa 2 son `emb_arg:<score>`, `emb_int:<score>`, `emb_unknown:<score>` y `emb_margin:<margin>`.
+- Capa 2 usa embeddings tipo `passage:` (`embed_documents`) para anclas y chunk. Si calcula el embedding del chunk, lo guarda temporalmente en `_index_vector` para que Qdrant pueda reutilizarlo.
+- `_index_vector` es interno y transitorio: no debe escribirse en JSON parsed ni subirse como payload a Qdrant.
 - Capa 3 LLM local: solo se usa en zona gris de embeddings, contra Ollama local si `SCOPE_LLM_ENABLED=true`.
 - El prompt de capa 3 tiene few-shot estricto para evitar falsos positivos en textos literarios/conceptuales sin evidencia argentina.
 - Modelo LLM default: `qwen2.5:3b-instruct`, configurable con `SCOPE_LLM_MODEL`.
@@ -399,6 +403,8 @@ backend/data/parsed/pagina12/YYYY/MM/documents_DD-MM-YYYY.json
 
 Qdrant recibe payload completo del chunk, incluyendo `country_scope`, `article_country_scope`, fechas, seccion, entidades, ubicaciones y `text`.
 
+`vector_store.index_documents()` reutiliza `_index_vector` cuando esta disponible y calcula embeddings solo para chunks faltantes. Soporta mezcla de chunks con y sin `_index_vector`; el orden de vectores se conserva y `_index_vector` se elimina del payload antes del upsert.
+
 Para inspeccionar lo cargado en Qdrant:
 
 ```powershell
@@ -418,13 +424,13 @@ python -m app.retrieval.inspect_store --limit 20 --chars 300
 Desde `E:\ProyectoRagFacultad2`:
 
 ```powershell
-python -m pytest backend\tests\test_pagina12_scraper.py backend\tests\test_html_parser.py backend\tests\test_run_ingestion.py backend\tests\test_gazetteer.py backend\tests\test_scope_classifier.py backend\tests\test_metadata_enrichment.py -q
+python -m pytest backend\tests\test_pagina12_scraper.py backend\tests\test_html_parser.py backend\tests\test_run_ingestion.py backend\tests\test_gazetteer.py backend\tests\test_scope_classifier.py backend\tests\test_metadata_enrichment.py backend\tests\test_vector_store_reuse.py -q
 ```
 
 Ultima verificacion conocida:
 
 ```text
-40 passed, 1 skipped
+43 passed, 1 skipped
 ```
 
 ## Pendientes inmediatos

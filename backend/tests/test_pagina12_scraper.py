@@ -243,3 +243,17 @@ def test_download_articles_from_url_file_salteia_existentes(tmp_path, monkeypatc
 
     assert stored_files == [html_path]
     get_text.assert_not_called()
+
+
+def test_limit_url_items_per_section_balancea_muestra():
+    url_items = [
+        {"url": "https://www.pagina12.com.ar/diario/elpais/1-1-2005-03-15.html", "section": "elpais"},
+        {"url": "https://www.pagina12.com.ar/diario/elpais/1-2-2005-03-15.html", "section": "elpais"},
+        {"url": "https://www.pagina12.com.ar/diario/elmundo/4-1-2005-03-15.html", "section": "elmundo"},
+        {"url": "https://www.pagina12.com.ar/diario/elmundo/4-2-2005-03-15.html", "section": "elmundo"},
+        {"url": "https://www.pagina12.com.ar/diario/espectaculos/6-1-2005-03-15.html", "section": "espectaculos"},
+    ]
+
+    limited = pagina12._limit_url_items_per_section(url_items, max_articles_per_section=1)
+
+    assert [item["section"] for item in limited] == ["elpais", "elmundo", "espectaculos"]

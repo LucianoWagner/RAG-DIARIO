@@ -22,3 +22,11 @@ def test_find_locations_detecta_caba_como_sigla_independiente():
 
     assert "CABA" in locations
     assert "La Plata" in locations
+
+
+def test_is_known_location_valida_aliases_del_gazetteer():
+    gazetteer = _gazetteer()
+
+    assert gazetteer.is_known_location("La Plata")
+    assert gazetteer.is_known_location("caba")
+    assert not gazetteer.is_known_location("Montevideo")

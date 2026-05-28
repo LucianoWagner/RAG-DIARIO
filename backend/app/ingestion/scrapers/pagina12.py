@@ -432,11 +432,34 @@ def _load_urls_payload(urls_path: Path) -> dict:
     return payload
 
 
+def _section_for_url_item(item: dict) -> str:
+    return str(item.get("section") or _article_section(str(item.get("url", "")))).lower()
+
+
+def _limit_url_items_per_section(url_items: list[dict], max_articles_per_section: int | None) -> list[dict]:
+    if max_articles_per_section is None:
+        return url_items
+    if max_articles_per_section <= 0:
+        return []
+
+    counts: dict[str, int] = {}
+    limited: list[dict] = []
+    for item in url_items:
+        section = _section_for_url_item(item)
+        section_count = counts.get(section, 0)
+        if section_count >= max_articles_per_section:
+            continue
+        counts[section] = section_count + 1
+        limited.append(item)
+    return limited
+
+
 def download_articles_from_url_file(
     urls_path: Path,
     output_root: Path | None = None,
     force: bool = False,
     max_articles: int | None = None,
+    max_articles_per_section: int | None = None,
     sections: list[str] | None = None,
 ) -> list[Path]:
     urls_path = Path(urls_path)
@@ -450,17 +473,20 @@ def download_articles_from_url_file(
         url_items = [
             item
             for item in url_items
-            if str(item.get("section") or _article_section(str(item.get("url", "")))).lower() in wanted_sections
+            if _section_for_url_item(item) in wanted_sections
         ]
+    url_items = _limit_url_items_per_section(url_items, max_articles_per_section)
     if max_articles is not None:
         url_items = url_items[:max_articles]
     stored_files: list[Path] = []
 
     logger.info(
-        "Descargando HTML de notas Pagina 12 | fecha=%s | urls=%s | sections=%s | output_dir=%s",
+        "Descargando HTML de notas Pagina 12 | fecha=%s | urls=%s | sections=%s | "
+        "max_per_section=%s | output_dir=%s",
         raw_date,
         len(url_items),
         ",".join(sections or ["*"]),
+        max_articles_per_section,
         output_dir,
     )
     if not url_items:
@@ -558,6 +584,12 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="Redescarga HTML aunque ya exista.")
     parser.add_argument("--max-articles", type=int, default=None, help="Limite opcional de notas a descargar.")
     parser.add_argument(
+        "--max-articles-per-section",
+        type=int,
+        default=None,
+        help="Limite opcional de notas por seccion para muestras balanceadas.",
+    )
+    parser.add_argument(
         "--sections",
         default=None,
         help="Lista separada por coma de secciones a descargar, ej: elmundo,deportes.",
@@ -570,6 +602,7 @@ def main() -> None:
             urls_path=urls_path,
             force=args.force,
             max_articles=args.max_articles,
+            max_articles_per_section=args.max_articles_per_section,
             sections=sections,
         )
 

@@ -60,6 +60,36 @@ def _build_point_id(chunk: Document) -> str:
     return str(uuid5(NAMESPACE_URL, digest))
 
 
+def _is_valid_vector(vector: object) -> bool:
+    return isinstance(vector, list) and bool(vector) and all(isinstance(value, (int, float)) for value in vector)
+
+
+def _resolve_embeddings(chunks: list[Document]) -> list[list[float]]:
+    embeddings: list[list[float] | None] = [None] * len(chunks)
+    missing_indices: list[int] = []
+    missing_texts: list[str] = []
+
+    for index, chunk in enumerate(chunks):
+        vector = chunk.metadata.get("_index_vector")
+        if _is_valid_vector(vector):
+            embeddings[index] = [float(value) for value in vector]
+        else:
+            missing_indices.append(index)
+            missing_texts.append(chunk.page_content)
+
+    reused_count = len(chunks) - len(missing_indices)
+    if reused_count:
+        logger.info(f"Reutilizando embeddings precomputados: {reused_count}/{len(chunks)}")
+
+    if missing_texts:
+        logger.info(f"Generando embeddings faltantes: {len(missing_texts)}")
+        generated = get_embedding_function().embed_documents(missing_texts)
+        for index, vector in zip(missing_indices, generated):
+            embeddings[index] = vector
+
+    return [vector for vector in embeddings if vector is not None]
+
+
 def ensure_collection() -> None:
     settings = get_settings()
     client = get_qdrant_client()
@@ -128,14 +158,13 @@ def index_documents(chunks: list[Document], force: bool = False) -> int:
         logger.warning("No hay chunks para indexar")
         return 0
 
-    logger.info(f"Generando embeddings para {len(chunks)} chunks")
-    embeddings = get_embedding_function().embed_documents(
-        [chunk.page_content for chunk in chunks]
-    )
+    logger.info(f"Resolviendo embeddings para {len(chunks)} chunks")
+    embeddings = _resolve_embeddings(chunks)
     logger.info("Embeddings generados")
     points = []
     for chunk, vector in zip(chunks, embeddings):
         payload = dict(chunk.metadata)
+        payload.pop("_index_vector", None)
         payload["text"] = chunk.page_content
         points.append(
             qmodels.PointStruct(
