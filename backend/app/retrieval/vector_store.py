@@ -191,12 +191,26 @@ class QdrantSemanticRetriever:
         self.embeddings = get_embedding_function()
         ensure_collection()
 
-    def invoke(self, query: str) -> list[Document]:
+    def invoke(self, query: str, filters: dict | None = None) -> list[Document]:
         vector = self.embeddings.embed_query(query)
+        
+        conditions = []
+        if filters:
+            for key, value in filters.items():
+                if value is not None:
+                    conditions.append(
+                        qmodels.FieldCondition(
+                            key=key,
+                            match=qmodels.MatchValue(value=value)
+                        )
+                    )
+        q_filter = qmodels.Filter(must=conditions) if conditions else None
+
         results = self.client.search(
             collection_name=self.settings.qdrant_collection,
             query_vector=vector,
             limit=self.settings.top_k,
+            query_filter=q_filter,
             with_payload=True,
         )
 
