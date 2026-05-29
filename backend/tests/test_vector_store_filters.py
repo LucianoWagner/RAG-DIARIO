@@ -16,11 +16,13 @@ def test_qdrant_semantic_retriever_filters(mock_get_embed, mock_get_client, mock
     mock_get_embed.return_value = mock_embeddings
 
     mock_client = MagicMock()
-    # Mock search results returning a single mock Qdrant ScoredPoint
+    # Mock query_points results returning a mock Qdrant response with a ScoredPoint
     mock_point = MagicMock()
     mock_point.score = 0.85
     mock_point.payload = {"text": "contenido de prueba", "year": 2005, "section": "elpais"}
-    mock_client.search.return_value = [mock_point]
+    mock_response = MagicMock()
+    mock_response.points = [mock_point]
+    mock_client.query_points.return_value = mock_response
     mock_get_client.return_value = mock_client
 
     # Instantiate retriever
@@ -30,15 +32,15 @@ def test_qdrant_semantic_retriever_filters(mock_get_embed, mock_get_client, mock
     filters = {"year": 2005, "section": "elpais", "empty_filter": None}
     docs = retriever.invoke(query="conflicto", filters=filters)
     
-    # Assert embeddings and client search calls
+    # Assert embeddings and client query_points calls
     mock_embeddings.embed_query.assert_called_once_with("conflicto")
     
-    # Assert search was called with correct filter object
-    mock_client.search.assert_called_once()
-    kwargs = mock_client.search.call_args.kwargs
+    # Assert query_points was called with correct filter object
+    mock_client.query_points.assert_called_once()
+    kwargs = mock_client.query_points.call_args.kwargs
     
     assert kwargs["collection_name"] == retriever.settings.qdrant_collection
-    assert kwargs["query_vector"] == [0.1, 0.2, 0.3]
+    assert kwargs["query"] == [0.1, 0.2, 0.3]
     assert kwargs["limit"] == retriever.settings.top_k
     assert kwargs["with_payload"] is True
     

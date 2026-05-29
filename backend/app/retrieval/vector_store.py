@@ -206,13 +206,14 @@ class QdrantSemanticRetriever:
                     )
         q_filter = qmodels.Filter(must=conditions) if conditions else None
 
-        results = self.client.search(
+        response = self.client.query_points(
             collection_name=self.settings.qdrant_collection,
-            query_vector=vector,
+            query=vector,
             limit=self.settings.top_k,
             query_filter=q_filter,
             with_payload=True,
         )
+        results = response.points
 
         documents: list[Document] = []
         for item in results:

@@ -433,8 +433,55 @@ Ultima verificacion conocida:
 43 passed, 1 skipped
 ```
 
+## Detalles técnicos de recuperación y generación (Fase 2 / Rerank & Hybrid)
+
+- **Qdrant API Update**: Se migró de `client.search` (removido/deprecado en `qdrant-client>=1.18.0`) a `client.query_points` en `vector_store.py`.
+- **QueryPlanner robusto**: 
+  - Se hizo que `search_query` en `QueryPlan` sea opcional (`str | None = None`) con fallback al `question` original para evitar excepciones cuando OpenWebUI genera llamadas internas (como títulos automáticos o tags) y devuelve `search_query` nulo.
+  - Se implementó un filtro de post-procesamiento de fechas: si el planner infiere erróneamente un primer día del mes (`YYYY-MM-01`) sin que la consulta lo especifique explícitamente (ej: "enero de 2005" vs "1 de enero"), se remueve el filtro de fecha exacta y se mantiene el año general, evitando que se excluyan los documentos indexados de otros días de ese mes.
+- **Fuentes en OpenWebUI**: Se puebla el campo `sources` en la respuesta RAG para delegar la visualización de referencias directamente al arreglo que maneja el frontend, permitiendo citar correctamente sin interferir con la coherencia gramatical del prompt de generación.
+
+## Flujo del Retriever y Pipeline RAG (Detalles de Implementación)
+
+### 1. Planificación de Consultas (`query_planner.py`)
+El `QueryPlanner` utiliza un LLM estructurado (Groq `llama-3.3-70b-versatile`) para clasificar la intención (`CHITCHAT`, `ARCHIVE_SEARCH`, `OUT_OF_SCOPE`) y extraer metadatos estructurados como `year`, `decade`, `publication_date`, y `section`.
+* **Heurística de Saludos**: Se interceptan saludos y despedidas de forma local y ultrarrápida usando expresiones regulares para evitar llamadas innecesarias al LLM.
+* **Limpieza de Fechas**: Si el LLM infiere una fecha exacta del tipo `YYYY-MM-01` (por ejemplo, al leer "enero de 2005") sin que el usuario haya especificado un día real (como "1ro" o "1"), el planificador limpia el campo `publication_date` dejándolo en `None` para evitar que un filtro exacto descarte notas de otros días del mes (ej. del `2005-01-03`).
+
+### 2. Recuperación Híbrida (`hybrid.py`)
+La búsqueda combina el buscador léxico (BM25) y el semántico (Qdrant) mediante la clase `CustomHybridRetriever`.
+* **Inicialización de BM25**: Como el retriever de BM25 corre en memoria, al iniciar el pipeline se realiza un scroll paginado de Qdrant (`_load_documents_for_bm25` en `pipeline.py`) para descargar todos los chunks y construir el corpus tokenizado en español.
+* **Filtros cruzados**: Tanto el buscador léxico como el semántico reciben y aplican los filtros de metadatos (año, sección, diario) de forma estricta antes de puntuar.
+* **Pesos Adaptativos Heurísticos (`_determine_retrieval_weights`)**:
+  * Utiliza **spaCy** (`es_core_news_md`) para analizar la estructura sintáctica de la consulta.
+  * Si la consulta es **puntual/fáctica** (contiene números, entidades `PER`, `ORG` o fechas): Se asigna `bm25_weight = 0.6` y `semantic_weight = 0.4`.
+  * Si la consulta es **conceptual/abstracta** (no contiene números ni entidades y posee mayor densidad de verbos/adjetivos genéricos): Se asigna `semantic_weight = 0.6` y `bm25_weight = 0.4`.
+  * Por defecto: Pesos equilibrados de `0.5` / `0.5`.
+* **Fusión por RRF (Reciprocal Rank Fusion)**: Combina los rankings de BM25 y Qdrant aplicando la fórmula estándar de RRF con constante de suavizado $k=60$.
+
+### 3. Reranking (`reranker.py`)
+Los chunks recuperados se pasan por un reranker de paso secundario para refinar la relevancia semántica de los textos respecto a la consulta.
+* Admite dos modos:
+  1. **FlashRank** (por defecto, usando el modelo multilingüe `ms-marco-MultiBERT-L-12` para CPU liviano).
+  2. **CrossEncoder de SentenceTransformers** (si se configura una ruta de modelo en settings).
+* El reranker anota en los metadatos de cada chunk: `rrf_score`, `bm25_rank`, `semantic_rank`, y el score final del rerankeo (`rerank_score`).
+
+### 4. Verificación de Evidencia (`evidence_checker.py`)
+Antes de llamar al LLM generador, el RAG evalúa si los chunks recuperados contienen suficiente evidencia para responder con certeza y evitar alucinaciones.
+* **Consistencia Temporal Estricta**: Si la consulta menciona un año (ej. `2005`) pero ningún chunk de los recuperados corresponde a ese año en su metadata, se rechaza la búsqueda por inconsistencia temporal y se retorna `INSUFFICIENT`.
+* **Umbrales adaptativos según intención**:
+  * **Consultas Puntuales/Fácticas** (peso de BM25 > 0.5): Requiere que pertenezcan al menos a 1 artículo único y (que haya al menos 2 fragmentos relevantes o al menos 1 fragmento con un score superior a `min_top_score`).
+  * **Consultas Amplias/Resumen** (peso Semántico > 0.5): Requiere al menos 3 fragmentos relevantes distribuidos en un mínimo de 2 artículos distintos para asegurar representatividad. De lo contrario, se retorna `LOW_CONFIDENCE` para permitir una respuesta parcial.
+  * En caso de no superar los umbrales mínimos, el sistema se abstiene y devuelve el mensaje de abstención configurado: `"No tengo suficiente información en el archivo consultado."` sin llamar al LLM de generación.
+
+### 5. Generación de Respuesta (`generator.py`)
+Si la evidencia es suficiente, se formatea el contexto incluyendo identificadores de documento, títulos, fechas y URLs.
+* Se invoca a Groq (`llama-3.3-70b-versatile`) con instrucciones estrictas de no inventar datos y responder solo con el contexto provisto.
+* Toda la metadata y fragmentos recuperados se inyectan en el arreglo `sources` para que el frontend de OpenWebUI renderice las tarjetas de fuentes correctamente debajo de la respuesta.
+
 ## Pendientes inmediatos
 
-- Validar con `preview` varias fechas/secciones antes de indexar definitivamente en Qdrant.
-- Revisar si la fase siguiente debe filtrar indexacion por `article_country_scope="argentina"` o conservar tambien `unknown` para analisis posterior.
-- Mantener `PLAN_HEMEROTECA_RAG.md` como guia principal y completar este `AGENTS.md` cuando haya decisiones nuevas.
+- Validar con `preview` varias fechas/secciones adicionales.
+- Expandir la ingesta de fechas del año 2005 (`--stage all --year 2005`) para contar con un volumen mayor de documentos.
+- Avanzar con la Fase 4 del plan para el soporte de archivos PDF históricos con OCR (BNA/Internet Archive).
+- Mantener `PLAN_HEMEROTECA_RAG.md` como guía principal.

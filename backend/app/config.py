@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = 20.0
 
     reranker_model_name: str = "ms-marco-MultiBERT-L-12"
+    reranker_type: str = "flashrank"  # "flashrank" or "cross-encoder"
     log_level: str = "INFO"
 
     model_cache_dir: str | None = Field(default=None)

@@ -45,7 +45,8 @@ class QueryPlan(BaseModel):
         default="pagina12",
         description="Nombre del diario. Por defecto 'pagina12'."
     )
-    search_query: str = Field(
+    search_query: str | None = Field(
+        default=None,
         description="Consulta optimizada y limpia en español para buscar en la base de datos vectorial/léxica, resumiendo el núcleo temático y eliminando ruidos conversacionales o filtros temporales explícitos."
     )
 
@@ -114,6 +115,19 @@ class QueryPlanner:
                 # Normalizar la sección si fue extraída
                 if plan.section:
                     plan.section = _normalize_string(plan.section).lower().replace(" ", "")
+                
+                # Validar y post-procesar la fecha para evitar falsos positivos
+                if plan.publication_date:
+                    if not re.match(r"^\d{4}-\d{2}-\d{2}$", plan.publication_date):
+                        plan.publication_date = None
+                    else:
+                        # Si es el primer día del mes (ej: YYYY-MM-01), verificar si el usuario realmente especificó el día
+                        parts = plan.publication_date.split("-")
+                        if parts[2] == "01":
+                            q_clean = _normalize_string(question).lower()
+                            if not re.search(r"\b(1|uno|primero|1ro)\b", q_clean):
+                                plan.publication_date = None
+
                 logger.info(f"Query plan exitoso: intent={plan.intent}, filters={plan.model_dump(exclude={'search_query', 'intent'})}")
                 return plan
             raise ValueError("No se pudo obtener una instancia válida de QueryPlan.")

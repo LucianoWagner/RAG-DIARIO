@@ -51,7 +51,23 @@ def generate_response(
     llm = llm or get_llm()
     response = llm.invoke(messages)
     answer_text = str(response.content)
-    citations = parse_citations(answer_text, context_chunks)
+
+    # Poblamos 'sources' con todos los chunks provistos en el contexto del LLM
+    citations: list[SourceCitation] = []
+    for index, chunk in enumerate(context_chunks):
+        meta = chunk.metadata
+        citations.append(
+            SourceCitation(
+                citation_id=index + 1,
+                source_label=meta.get("article_title") or meta.get("source_url") or "Fuente sin título",
+                source_url=meta.get("source_url"),
+                publication_date=_coerce_date(meta.get("publication_date")),
+                page_number=meta.get("page_number"),
+                article_title=meta.get("article_title"),
+                relevant_fragment=chunk.page_content,
+                relevance_score=float(meta.get("rerank_score", meta.get("semantic_score", 0.0))),
+            )
+        )
 
     metadata_items = []
     for chunk in context_chunks:
@@ -73,6 +89,7 @@ def generate_response(
 
 
 def parse_citations(answer_text: str, chunks: list[Document]) -> list[SourceCitation]:
+    """Mantenido para compatibilidad con tests existentes."""
     matches = re.findall(r"\[Fuente (\d+)\]", answer_text, re.IGNORECASE)
     citations: list[SourceCitation] = []
     seen: set[int] = set()
@@ -87,7 +104,7 @@ def parse_citations(answer_text: str, chunks: list[Document]) -> list[SourceCita
         citations.append(
             SourceCitation(
                 citation_id=index + 1,
-                source_label=meta.get("article_title") or meta.get("source_url") or "Fuente sin titulo",
+                source_label=meta.get("article_title") or meta.get("source_url") or "Fuente sin título",
                 source_url=meta.get("source_url"),
                 publication_date=_coerce_date(meta.get("publication_date")),
                 page_number=meta.get("page_number"),
