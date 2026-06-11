@@ -106,9 +106,18 @@ async def chat_completions(request: ChatCompletionRequest):
         final_answer = rag_response.answer
         if rag_response.sources:
             final_answer += "\n\nFuentes:\n"
+            seen_sources = set()
             for src in rag_response.sources:
                 date_text = src.publication_date.isoformat() if src.publication_date else "s/f"
-                final_answer += f"- {src.source_label} | {date_text}\n"
+                source_key = (src.source_label, src.source_url, date_text)
+                if source_key in seen_sources:
+                    continue
+                seen_sources.add(source_key)
+                
+                if src.source_url:
+                    final_answer += f"- [{src.source_label}]({src.source_url}) | {date_text}\n"
+                else:
+                    final_answer += f"- {src.source_label} | {date_text}\n"
     except Exception as exc:
         final_answer = f"Error procesando la solicitud: {exc}"
 
