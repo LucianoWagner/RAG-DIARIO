@@ -1514,13 +1514,15 @@ backend/tests/test_gazetteer.py
 backend/tests/test_scope_classifier.py
 backend/tests/test_metadata_enrichment.py
 backend/tests/test_vector_store_reuse.py
+backend/tests/test_gemini_embeddings.py
+backend/tests/test_reranker_and_pipeline.py
 ```
 
 Comando:
 
 ```powershell
 cd E:\ProyectoRagFacultad2
-python -m pytest backend\tests\test_pagina12_scraper.py backend\tests\test_html_parser.py backend\tests\test_run_ingestion.py backend\tests\test_gazetteer.py backend\tests\test_scope_classifier.py backend\tests\test_metadata_enrichment.py backend\tests\test_vector_store_reuse.py -q
+python -m pytest backend\tests\test_pagina12_scraper.py backend\tests\test_html_parser.py backend\tests\test_run_ingestion.py backend\tests\test_gazetteer.py backend\tests\test_scope_classifier.py backend\tests\test_metadata_enrichment.py backend\tests\test_vector_store_reuse.py backend\tests\test_gemini_embeddings.py backend\tests\test_reranker_and_pipeline.py -q
 ```
 
 Que cubren:
@@ -1597,6 +1599,12 @@ payload.pop("_index_vector", None)
 ### 6. `preview` es el control de calidad
 
 Antes de indexar una carga grande conviene revisar varias fechas y secciones con `preview`.
+
+### 7. Reconstrucción de Artículos en Caliente
+Para mitigar la pérdida de contexto que produce el chunking en preguntas complejas (donde la respuesta involucra hechos separados en un mismo artículo), el pipeline agrupa los chunks recuperados por su `source_id`, obtiene el artículo completo reconstruyendo sus chunks originales de Qdrant, y le entrega al LLM el texto de los top 3 artículos completos en vez de fragmentos inconexos.
+
+### 8. Rate Limiting de Embeddings API
+Dado que las claves gratuitas de Gemini tienen un límite estricto de 15 RPM (y que cada elemento de un lote cuenta para la cuota), se implementó un loteo reducido (`batch_size=20`) junto a esperas obligatorias de 4 segundos entre lotes y reintentos automáticos mediante `tenacity`. Esto permite subir miles de documentos de forma gratuita sin fallas por rate limit.
 
 ## Resumen final del flujo
 

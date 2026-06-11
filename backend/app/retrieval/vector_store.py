@@ -6,11 +6,13 @@ import hashlib
 from functools import lru_cache
 from uuid import uuid5, NAMESPACE_URL
 
+import httpx
 from langchain_core.documents import Document
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 from loguru import logger
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.config import get_settings
 
@@ -36,9 +38,82 @@ class E5Embeddings:
         )[0].tolist()
 
 
+class GeminiEmbeddings:
+    def __init__(self, api_key: str):
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY no encontrada en la configuración o el archivo .env")
+        self.api_key = api_key
+        self.url_single = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key={self.api_key}"
+        self.url_batch = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents?key={self.api_key}"
+        logger.info("Inicializado proveedor de embeddings Gemini (API)")
+
+    @retry(stop=stop_after_attempt(7), wait=wait_exponential(multiplier=2, min=4, max=30))
+    def _post_with_retry(self, url: str, payload: dict) -> httpx.Response:
+        with httpx.Client(timeout=30.0) as client:
+            headers = {
+                "Content-Type": "application/json"
+            }
+            response = client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            return response
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        
+        batch_size = 20
+        all_embeddings = []
+        import time
+        
+        for i in range(0, len(texts), batch_size):
+            if i > 0:
+                logger.info("Esperando 4s antes del siguiente lote de embeddings para evitar límite de tasa (429)...")
+                time.sleep(4.0)
+
+            chunk = texts[i:i + batch_size]
+            requests = [
+                {
+                    "model": "models/gemini-embedding-001",
+                    "content": {
+                        "parts": [{"text": _normalize_text(text)}]
+                    }
+                }
+                for text in chunk
+            ]
+            payload = {"requests": requests}
+            
+            try:
+                response = self._post_with_retry(self.url_batch, payload)
+                data = response.json()
+                for item in data.get("embeddings", []):
+                    all_embeddings.append(item["values"])
+            except Exception as e:
+                logger.error(f"Error llamando a Gemini embeddings API (batch): {e}")
+                raise e
+                
+        return all_embeddings
+
+    def embed_query(self, query: str) -> list[float]:
+        payload = {
+            "model": "models/gemini-embedding-001",
+            "content": {
+                "parts": [{"text": _normalize_text(query)}]
+            }
+        }
+        try:
+            response = self._post_with_retry(self.url_single, payload)
+            data = response.json()
+            return data["embedding"]["values"]
+        except Exception as e:
+            logger.error(f"Error llamando a Gemini embeddings API (single): {e}")
+            raise e
+
+
 @lru_cache()
-def get_embedding_function() -> E5Embeddings:
+def get_embedding_function():
     settings = get_settings()
+    if settings.embedding_provider == "gemini":
+        return GeminiEmbeddings(api_key=settings.gemini_api_key)
     return E5Embeddings(settings.embedding_model, cache_folder=settings.model_cache_dir)
 
 
@@ -103,13 +178,22 @@ def ensure_collection() -> None:
         return
 
     logger.info(f"Creando coleccion Qdrant | vector_size={vector_size}")
-    client.create_collection(
-        collection_name=settings.qdrant_collection,
-        vectors_config=qmodels.VectorParams(
-            size=vector_size,
-            distance=qmodels.Distance.COSINE,
-        ),
-    )
+    import time
+    for attempt in range(5):
+        try:
+            client.create_collection(
+                collection_name=settings.qdrant_collection,
+                vectors_config=qmodels.VectorParams(
+                    size=vector_size,
+                    distance=qmodels.Distance.COSINE,
+                ),
+            )
+            break
+        except Exception as exc:
+            if attempt == 4:
+                raise exc
+            logger.warning(f"Fallo al crear coleccion (intento {attempt + 1}/5): {exc}. Reintentando en 1s...")
+            time.sleep(1)
 
     ensure_payload_indexes()
 
@@ -150,6 +234,15 @@ def index_documents(chunks: list[Document], force: bool = False) -> int:
         existing = {collection.name for collection in client.get_collections().collections}
         if settings.qdrant_collection in existing:
             client.delete_collection(settings.qdrant_collection)
+            # Esperar a que Qdrant libere completamente la coleccion
+            import time
+            for _ in range(10):
+                existing_now = {c.name for c in client.get_collections().collections}
+                if settings.qdrant_collection not in existing_now:
+                    break
+                time.sleep(0.5)
+            # Pequeño sleep extra por seguridad para liberar locks internos
+            time.sleep(1)
         ensure_collection()
     else:
         ensure_collection()

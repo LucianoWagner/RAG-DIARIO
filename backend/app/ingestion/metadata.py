@@ -31,11 +31,48 @@ def enrich_metadata(
     scope_classifier: ScopeClassifier | None = None,
 ) -> list[Document]:
     gazetteer = gazetteer or load_gazetteer()
+    embedder = get_embedding_function()
+    
     scope_classifier = scope_classifier or ScopeClassifier(
-        embedder=get_embedding_function(),
+        embedder=embedder,
         llm_client=build_default_llm_client(),
         gazetteer=gazetteer,
     )
+    
+    # 1. Correr Capa 1 (heurística) para pre-filtrar y determinar cuáles
+    # chunks realmente necesitan pasar a Capa 2 (Embeddings)
+    chunks_needing_embeddings = []
+    for chunk in chunks:
+        # Los textos demasiado cortos se deciden como 'unknown' sin embeddings
+        if len(chunk.page_content.strip()) < 100:
+            continue
+            
+        entities = extract_entities(chunk.page_content)
+        locations = gazetteer.find_locations(chunk.page_content)
+        
+        classifier_metadata = dict(chunk.metadata)
+        classifier_metadata["organizations"] = entities["organizations"]
+        classifier_metadata["location_mentions"] = locations
+        
+        if hasattr(scope_classifier, "_classify_heuristic"):
+            heuristic = scope_classifier._classify_heuristic(chunk.page_content, classifier_metadata)
+            if heuristic.country_scope == "unknown":
+                chunks_needing_embeddings.append(chunk)
+
+    # 2. Pre-calcular embeddings en lote (batch) SOLAMENTE para los no resueltos por heurística
+    if chunks_needing_embeddings:
+        logger.info(
+            f"Filtro Capa 1: {len(chunks) - len(chunks_needing_embeddings)}/{len(chunks)} chunks resueltos por heurística. "
+            f"Pre-calculando embeddings para los {len(chunks_needing_embeddings)} chunks restantes..."
+        )
+        try:
+            texts = [c.page_content for c in chunks_needing_embeddings]
+            vectors = embedder.embed_documents(texts)
+            for chunk, vector in zip(chunks_needing_embeddings, vectors):
+                chunk.metadata["_index_vector"] = vector
+            logger.info("Pre-cómputo de embeddings de Capa 2 finalizado exitosamente.")
+        except Exception as exc:
+            logger.warning(f"No se pudo realizar el pre-cómputo de embeddings: {exc}. Se calcularán bajo demanda.")
     scope_stats = {"argentina": 0, "international": 0, "unknown": 0}
     logger.info(f"Enriqueciendo metadata | chunks={len(chunks)}")
 

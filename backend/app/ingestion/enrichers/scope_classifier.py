@@ -291,8 +291,10 @@ class ScopeClassifier:
         ):
             return EmbeddingDecision(ScopeResult("unknown", []), final=False)
 
-        chunk_embedding = self._embed_many([text])[0]
-        metadata["_index_vector"] = chunk_embedding
+        chunk_embedding = metadata.get("_index_vector")
+        if chunk_embedding is None:
+            chunk_embedding = self._embed_many([text])[0]
+            metadata["_index_vector"] = chunk_embedding
         score_arg = max(_cosine_similarity(chunk_embedding, anchor) for anchor in self._arg_anchor_embeddings)
         score_int = max(_cosine_similarity(chunk_embedding, anchor) for anchor in self._int_anchor_embeddings)
         score_unknown = max(

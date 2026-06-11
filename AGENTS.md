@@ -477,7 +477,43 @@ Antes de llamar al LLM generador, el RAG evalúa si los chunks recuperados conti
 ### 5. Generación de Respuesta (`generator.py`)
 Si la evidencia es suficiente, se formatea el contexto incluyendo identificadores de documento, títulos, fechas y URLs.
 * Se invoca a Groq (`llama-3.3-70b-versatile`) con instrucciones estrictas de no inventar datos y responder solo con el contexto provisto.
-* Toda la metadata y fragmentos recuperados se inyectan en el arreglo `sources` para que el frontend de OpenWebUI renderice las tarjetas de fuentes correctamente debajo de la respuesta.
+* Toda la metadata y fragmentos recuperados se inyectan en el arreglo `sources` para que el frontend de OpenWebUI renderice las tarjetas de fuentes correctamente debajo de la respuesta (los títulos de las fuentes ahora se formatean como enlaces Markdown clickeables y se deduplican en la lista de "Fuentes" al final del texto).
+
+### 6. Proveedor de Embeddings API (Google gemini-embedding-001)
+Se implementó soporte dinámico de proveedores de embeddings configurables en `.env`:
+* **Variables**:
+  * `EMBEDDING_PROVIDER`: `"local"` (SentenceTransformer local) o `"gemini"` (Google AI Studio embeddings API).
+  * `GEMINI_API_KEY`: Tu API key de Google AI Studio (requerida si `EMBEDDING_PROVIDER=gemini`).
+* **Modelo**: `gemini-embedding-001` (dimensión `768`).
+* **Reset de Indexación**: Debido al cambio de dimensión (de `1024` del modelo local a `768` de Google), es obligatorio reiniciar la colección de Qdrant pasando el flag `--reset-index` al momento de la ingesta para que recree la colección con la dimensión correcta.
+* **Control de Rate Limits y Reintentos (Gemini)**:
+  - Para la clave gratuita de Gemini (15 RPM), se redujo el tamaño de lote a `batch_size = 20` con una espera de `time.sleep(4.0)` entre lotes en `vector_store.py` para mantenerse por debajo del límite de tasa.
+  - Se configuró un decorador de reintento (`tenacity`) de hasta 7 intentos con espera exponencial de hasta 30s en peticiones HTTP para tolerar picos o demoras de la API externa de manera resiliente.
+
+### 7. Reconstrucción Dinámica de Artículos
+Para evitar problemas de fragmentación y pérdida de contexto (como el caso en el que la respuesta a una pregunta compleja se encuentra en partes distantes de una misma nota de Página/12):
+* El pipeline recibe los chunks rerankeados y extrae los primeros `max_articles=3` identificadores únicos de artículos (`source_id`).
+* Consulta a Qdrant mediante scroll filtrado todos los fragmentos pertenecientes a esos artículos y los une ordenándolos según su `chunk_index`.
+* Esto proporciona al LLM el artículo completo unificado en el prompt de generación, lo cual de-duplica el contexto y previene alucinaciones o respuestas incompletas.
+
+### 8. Logging de recuperación detallado en Terminal
+Se agregaron logs descriptivos en `pipeline.py` para visualizar en tiempo real:
+* El listado ordenado de chunks recuperados indicando su score del reranker, score RRF, fecha, sección, título del artículo, y un snippet de su contenido.
+* El veredicto del verificador de evidencia con sus métricas clave.
+
+## Tests utiles
+
+Desde `E:\ProyectoRagFacultad2`:
+
+```powershell
+python -m pytest backend\tests\test_pagina12_scraper.py backend\tests\test_html_parser.py backend\tests\test_run_ingestion.py backend\tests\test_gazetteer.py backend\tests\test_scope_classifier.py backend\tests\test_metadata_enrichment.py backend\tests\test_vector_store_reuse.py backend\tests\test_gemini_embeddings.py backend\tests\test_reranker_and_pipeline.py -q
+```
+
+Ultima verificacion conocida:
+
+```text
+63 passed, 1 skipped
+```
 
 ## Pendientes inmediatos
 

@@ -17,8 +17,10 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://127.0.0.1:11434"
     llm_model: str = "llama3.1:8b"
+    embedding_provider: str = "local"  # "local" or "gemini"
     embedding_model: str = "intfloat/multilingual-e5-large"
     groq_api_key: str | None = None
+    gemini_api_key: str | None = None
     scope_embedding_threshold: float = 0.15
     scope_llm_model: str = "qwen2.5:3b-instruct"
     scope_llm_enabled: bool = True
